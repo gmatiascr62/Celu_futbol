@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-SIMULADOR DE FÚTBOL — 0.9
+SIMULADOR DE FÚTBOL — 1.0
 El partido se juega minuto a minuto con un modelo de Poisson entrenado con
 partidos reales (ver entrenar_modelo.py). Cada equipo puede tener un DT con
 IA que cambia la táctica según el resultado y el tiempo que queda.
@@ -17,6 +17,10 @@ suben de nivel hacia su potencial (más rápido los jóvenes). El de tu club
 lo elegís vos o lo decide el DT; entrenar fuerte rinde más, pero cansa y
 puede traer lesiones.
 
+El torneo largo se guarda solo después de cada fecha (partida.json) y se
+pueden jugar temporadas seguidas: los jugadores cumplen años, los veteranos
+bajan y se retiran, y suben juveniles de la cantera.
+
 Uso:
     python simulador_futbol.py                     # usa modelo_poisson.json
     python simulador_futbol.py otro_modelo.json    # usa otro modelo
@@ -31,7 +35,7 @@ import random
 import sys
 import textwrap
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 
 import jugadores as J
 
@@ -1020,33 +1024,74 @@ def posicion(tabla, nombre):
             return i, f
 
 
-def torneo_largo(modelo):
-    clubes = sorted(PLANTELES)
-    if len(clubes) < 4:
-        print("Hacen falta al menos 4 clubes reales en el modelo.")
-        return
-    print(f"\n=== TORNEO LARGO: {len(clubes)} equipos, ida y vuelta ===")
+# ---------------------------------------------------------------- partida guardada
+# El torneo largo se guarda solo después de cada fecha, y se pueden encadenar
+# temporadas: los jugadores mantienen lo que mejoraron, cumplen años, los
+# veteranos se retiran y suben juveniles. Si existe la variable de entorno
+# FUTBOL_PARTIDAS, la partida se guarda en esa carpeta.
+ARCHIVO_PARTIDA = "partida.json"
+VERSION_PARTIDA = 1
+
+
+def ruta_partida():
+    return os.path.join(os.environ.get("FUTBOL_PARTIDAS") or ".", ARCHIVO_PARTIDA)
+
+
+def guardar_partida(p):
+    datos = dict(p, version=VERSION_PARTIDA,
+                 equipos=[asdict(e) for e in p["equipos"]],
+                 tabla={n: dict(f) for n, f in p["tabla"].items()},
+                 goleadores=[[j, c, n] for (j, c), n in p["goleadores"].items()])
+    ruta = ruta_partida()
+    with open(ruta + ".tmp", "w", encoding="utf-8") as f:
+        json.dump(datos, f, ensure_ascii=False)
+    os.replace(ruta + ".tmp", ruta)    # si se corta a la mitad, queda la anterior
+
+
+def cargar_partida():
+    try:
+        with open(ruta_partida(), encoding="utf-8") as f:
+            datos = json.load(f)
+    except (OSError, ValueError):
+        return None
+    if datos.get("version") != VERSION_PARTIDA:
+        return None
+    equipos = []
+    for d in datos["equipos"]:
+        e = Equipo(**{k: v for k, v in d.items() if k != "plantel"})
+        e.plantel = [J.Jugador(**j) for j in d["plantel"]]
+        equipos.append(e)
+    datos["equipos"] = equipos
+    datos["fixture"] = [[tuple(x) for x in fecha] for fecha in datos["fixture"]]
+    datos["tabla"] = {n: Counter(f) for n, f in datos["tabla"].items()}
+    datos["goleadores"] = Counter({(j, c): n for j, c, n in datos["goleadores"]})
+    datos["plan_mio"] = tuple(datos["plan_mio"]) if datos["plan_mio"] else None
+    return datos
+
+
+def elegir_club_a_seguir(modelo):
     print("¿Querés seguir a un club? Sus partidos se ven con relato")
     print("y elegís su DT. Enter para no seguir a ninguno.")
     nombres_lista = sorted(modelo["equipos"])
-    mio = None
     while True:
         raw = input("Club: ").strip()
         if not raw:
-            break
+            return None
         if raw.isdigit() and 1 <= int(raw) <= len(nombres_lista):
             candidatos = [nombres_lista[int(raw) - 1]]
         else:
             candidatos = [n for n in nombres_lista if raw.lower() in n.lower()]
         if len(candidatos) == 1:
-            mio = candidatos[0]
-            print(f"-> {mio}")
-            break
+            print(f"-> {candidatos[0]}")
+            return candidatos[0]
         print("Hay varios: " + ", ".join(candidatos[:8]) if candidatos
               else "No lo encontré. Probá de nuevo (o Enter para ninguno).")
 
+
+def nueva_partida(modelo):
+    mio = elegir_club_a_seguir(modelo)
     equipos = []
-    for c in clubes:
+    for c in sorted(PLANTELES):
         d = modelo["equipos"][c]
         e = Equipo(c, d["ataque"], d["defensa"])
         e.plantel = J.copiar_plantel(PLANTELES[c])
@@ -1058,103 +1103,201 @@ def torneo_largo(modelo):
                                   weights=list(PERSONALIDAD_AL_AZAR.values()))[0]
             e.formacion = formacion_preferida(c, e.dt)
         equipos.append(e)
-    reponer_fisico(*equipos)
-    semilla = random.randrange(10 ** 9)
-    fixture = armar_fixture(len(equipos), random.Random(semilla))
-    tabla = {e.nombre: Counter(PJ=0) for e in equipos}
-    goleadores = Counter()
-    numero = 0
-    plan_mio = None            # None = el entrenamiento lo decide el DT
+    p = {"equipos": equipos, "mio": mio, "plan_mio": None, "temporada": 0,
+         "semilla": random.randrange(10 ** 9), "historial": []}
+    empezar_temporada(p)
+    return p
+
+
+def empezar_temporada(p):
+    p["temporada"] += 1
+    reponer_fisico(*p["equipos"])
+    p["fixture"] = armar_fixture(len(p["equipos"]),
+                                 random.Random(f"{p['semilla']}|{p['temporada']}"))
+    p["tabla"] = {e.nombre: Counter(PJ=0) for e in p["equipos"]}
+    p["goleadores"] = Counter()
+    p["numero"] = 0
+
+
+def cerrar_temporada(p):
+    """Anota el campeón en el historial y pasa el año de todos los planteles."""
+    campeon, f = ordenar_tabla(p["tabla"])[0]
+    (goleador, club), goles = p["goleadores"].most_common(1)[0]
+    registro = {"temporada": p["temporada"], "campeon": campeon, "puntos": f["Pts"],
+                "goleador": f"{goleador} ({club}), {goles}"}
+    if p["mio"]:
+        registro["puesto"] = posicion(p["tabla"], p["mio"])[0]
+    p["historial"].append(registro)
+    rng = random.Random(f"{p['semilla']}|{p['temporada']}|retiros")
+    usados = {j.completo for e in p["equipos"] for j in e.plantel}
+    cambios = {}
+    for e in p["equipos"]:
+        cambios[e.nombre] = J.pasar_temporada(e.plantel, e.ataque, e.defensa, rng, usados)
+    return cambios
+
+
+def mostrar_historial(p):
+    print("\n=== HISTORIAL ===")
+    for r in p["historial"]:
+        print(f"Temporada {r['temporada']}: 🏆 {r['campeon']} ({r['puntos']} pts)")
+        if "puesto" in r:
+            print(f"  {p['mio']}: {r['puesto']}°")
+        print(f"  Goleador: {r['goleador']}")
+    if not p["historial"]:
+        print("Todavía no terminó ninguna temporada.")
+
+
+def torneo_largo(modelo):
+    if len(PLANTELES) < 4:
+        print("Hacen falta al menos 4 clubes reales en el modelo.")
+        return
+    print(f"\n=== TORNEO LARGO: {len(PLANTELES)} equipos, ida y vuelta ===")
+    p = cargar_partida()
+    if p:
+        club = f", {p['mio']}" if p["mio"] else ""
+        print(f"Hay una partida guardada: temporada {p['temporada']}, "
+              f"fecha {p['numero']} de {len(p['fixture'])}{club}.")
+        print("1) Seguirla  2) Empezar una nueva (se borra)")
+        if input("> ").strip() == "2":
+            p = None
+    if not p:
+        p = nueva_partida(modelo)
+        guardar_partida(p)
+    equipos, mio = p["equipos"], p["mio"]
     informe = None             # lo que pasó en el último entrenamiento de tu club
-    rng_entreno = random.Random(f"{semilla}|entrenamiento")
 
     def jugar_fecha(con_relato):
-        nonlocal numero, informe
-        fecha = fixture[numero]
-        numero += 1
+        nonlocal informe
+        fixture, tabla, semilla = p["fixture"], p["tabla"], p["semilla"]
+        fecha = fixture[p["numero"]]
+        p["numero"] += 1
+        numero = p["numero"]
+        clave = f"{semilla}|{p['temporada']}|{numero}"
         resultados = []
         for l, v in fecha:
             local, visitante = equipos[l], equipos[v]
             es_mio = mio in (local.nombre, visitante.nombre)
             if es_mio and con_relato:
                 print("\n" + "#" * ANCHO)
-                print(f" FECHA {numero} de {len(fixture)}")
+                print(f" FECHA {numero} de {len(fixture)} · TEMPORADA {p['temporada']}")
                 print("#" * ANCHO)
                 input("Enter para jugar tu partido...")
             gl, gv, stats = simular_partido(local, visitante, modelo,
                                             mostrar=es_mio and con_relato,
-                                            semilla=f"{semilla}|{numero}|{l}|{v}")
+                                            semilla=f"{clave}|{l}|{v}")
             anotar(tabla, local, visitante, gl, gv)
             for lado, j, _ in stats["goles"]:
-                goleadores[(j.corto, (local if lado == "L" else visitante).nombre)] += 1
+                p["goleadores"][(j.corto, (local if lado == "L" else visitante).nombre)] += 1
             resultados.append((es_mio, f"{local.nombre[:15]} {gl}-{gv} {visitante.nombre[:15]}"))
         # Recuperación y entrenamiento de la semana
+        rng_entreno = random.Random(f"{clave}|entrenamiento")
         for e in equipos:
             for j in e.plantel:
                 j.fisico = min(1.0, j.fisico + RECUPERO_FECHA)
+            plan_mio = p["plan_mio"]
             plan = plan_mio if e.nombre == mio and plan_mio else plan_dt(e, rng_entreno)
             mejoras, lesionados = J.entrenar(e.plantel, *plan, rng_entreno)
             if e.nombre == mio:
                 informe = (plan, mejoras, lesionados, plan_mio is None)
+        guardar_partida(p)
         return resultados
 
     def resumen_mio():
         if mio:
-            pos, f = posicion(tabla, mio)
+            pos, f = posicion(p["tabla"], mio)
             print(f"\n{mio}: {pos}° con {f['Pts']} puntos "
                   f"({f['G']}G {f['E']}E {f['P']}P)")
 
-    while numero < len(fixture):
-        print(f"\n--- Fecha {numero + 1} de {len(fixture)} ---")
+    while True:
+        total = len(p["fixture"])
+        if p["numero"] >= total:
+            if not fin_de_temporada(p):
+                return
+            continue
+        print(f"\n--- Fecha {p['numero'] + 1} de {total} · Temporada {p['temporada']} ---")
         print("1) Jugar fecha  2) Jugar 5 fechas")
         print("3) Jugar hasta el final  4) Ver tabla")
-        print("5) Goleadores  6) Abandonar torneo")
-        if mio:
-            print("7) Entrenamiento  8) Mi plantel")
+        print("5) Goleadores  6) Guardar y salir")
+        print("7) Entrenamiento  8) Mi plantel\n9) Historial" if mio else "9) Historial")
         opcion = input("> ").strip()
         if opcion == "1":
             resultados = jugar_fecha(con_relato=True)
             input("\nEnter para ver los resultados de la fecha...")
-            print(f"\nResultados de la fecha {numero}:")
+            print(f"\nResultados de la fecha {p['numero']}:")
             for es_mio, r in resultados:
                 print(("► " if es_mio else "  ") + r)
             resumen_mio()
             if informe:
                 mostrar_entrenamiento(mio, *informe)
         elif opcion in ("2", "3"):
-            hasta = len(fixture) if opcion == "3" else min(len(fixture), numero + 5)
-            while numero < hasta:
+            hasta = total if opcion == "3" else min(total, p["numero"] + 5)
+            while p["numero"] < hasta:
                 resultados = jugar_fecha(con_relato=False)
                 propio = [r for es_mio, r in resultados if es_mio]
-                print(f"Fecha {numero}: " + (propio[0] if propio else "jugada"))
+                print(f"Fecha {p['numero']}: " + (propio[0] if propio else "jugada"))
             resumen_mio()
         elif opcion == "4":
-            mostrar_tabla(tabla)
+            mostrar_tabla(p["tabla"])
         elif opcion == "5":
-            mostrar_goleadores(goleadores, 10)
+            mostrar_goleadores(p["goleadores"], 10)
         elif opcion == "6":
+            guardar_partida(p)
+            print("Partida guardada. La seguís desde 'Torneo largo'.")
             return
         elif opcion == "7" and mio:
-            plan_mio = pedir_entrenamiento()
-            if plan_mio:
-                print(f"Plan: {plan_mio[0]} ({plan_mio[1]}) todas las semanas.")
+            p["plan_mio"] = pedir_entrenamiento()
+            if p["plan_mio"]:
+                print(f"Plan: {p['plan_mio'][0]} ({p['plan_mio'][1]}) todas las semanas.")
             else:
                 print("El DT decide el entrenamiento cada semana.")
+            guardar_partida(p)
         elif opcion == "8" and mio:
             J.mostrar_plantel(mio, next(e for e in equipos if e.nombre == mio).plantel)
+        elif opcion == "9":
+            mostrar_historial(p)
         else:
-            print(f"Elegí del 1 al {8 if mio else 6}.")
+            print("Elegí una opción de la lista.")
 
+
+def fin_de_temporada(p):
+    """Muestra el cierre de la temporada y pregunta si se sigue con la próxima.
+    Devuelve True si empieza otra."""
+    tabla, goleadores, mio = p["tabla"], p["goleadores"], p["mio"]
     mostrar_tabla(tabla)
     mostrar_goleadores(goleadores, 10)
     campeon, f = ordenar_tabla(tabla)[0]
     print("\n" + "*" * ANCHO)
-    print(f" 🏆 CAMPEÓN: {campeon}")
+    print(f" 🏆 CAMPEÓN TEMPORADA {p['temporada']}: {campeon}")
     print(f" {f['Pts']} puntos, {f['G']} ganados, {f['E']} empatados, {f['P']} perdidos")
     (j, club), n = goleadores.most_common(1)[0]
     print(f" ⚽ Goleador: {j} ({club}), {n} goles")
     print("*" * ANCHO)
-    resumen_mio()
+    if mio:
+        pos, f = posicion(tabla, mio)
+        print(f"\n{mio}: {pos}° con {f['Pts']} puntos "
+              f"({f['G']}G {f['E']}E {f['P']}P)")
+    print("\n1) Jugar la temporada siguiente")
+    print("2) Guardar y volver al menú")
+    if input("> ").strip() != "1":
+        guardar_partida(p)
+        return False
+    cambios = cerrar_temporada(p)
+    if mio:
+        retirados, juveniles = cambios[mio]
+        print(f"\n=== {mio}: pretemporada ===")
+        if retirados:
+            texto = "Se retiran: " + ", ".join(
+                f"{j.corto} ({j.pos}, {j.edad})" for j in retirados)
+            print(textwrap.fill(texto, ANCHO, subsequent_indent="  "))
+        if juveniles:
+            texto = "Suben de la cantera: " + ", ".join(
+                f"{j.corto} ({j.pos}, {j.edad}, pot. {j.potencial})" for j in juveniles)
+            print(textwrap.fill(texto, ANCHO, subsequent_indent="  "))
+        if not retirados:
+            print("No se retira nadie.")
+    empezar_temporada(p)
+    guardar_partida(p)
+    return True
 
 
 # ---------------------------------------------------------------- menú
@@ -1196,7 +1339,7 @@ def ver_plantel(modelo):
 
 def main():
     global PLANTELES
-    print("SIMULADOR DE FÚTBOL — 0.9")
+    print("SIMULADOR DE FÚTBOL — 1.0")
     ruta = sys.argv[1] if len(sys.argv) > 1 else "modelo_poisson.json"
     modelo = cargar_modelo(ruta)
     PLANTELES = J.cargar_planteles(modelo)
