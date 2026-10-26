@@ -318,12 +318,52 @@ def _clip(v, lo=20, hi=99):
     return max(lo, min(hi, v))
 
 
+def _potencial(j, rng):
+    """Hasta dónde puede llegar: los jóvenes tienen margen."""
+    if j.edad <= 21:
+        extra = rng.randint(6, 22)
+    elif j.edad <= 25:
+        extra = rng.randint(2, 11)
+    elif j.edad <= 29:
+        extra = rng.randint(0, 4)
+    else:
+        extra = 0
+    return min(99, nivel(j) + extra)
+
+
+def _redondear(j):
+    j.ataque, j.creacion = round(_clip(j.ataque)), round(_clip(j.creacion))
+    j.defensa, j.atajada = round(_clip(j.defensa)), round(_clip(j.atajada, 10))
+    j.resistencia = round(j.resistencia)
+
+
+def generar_jugador(pos, edad, meta_of, meta_de, calidad, rng, usados, apellidos_club):
+    """Un jugador nuevo para un club con ese nivel ofensivo y defensivo."""
+    if edad <= 21:
+        calidad -= 5
+    elif edad >= 33:
+        calidad -= 2
+    p = PERFIL[pos]
+    at = meta_of + p["ataque"] + calidad + rng.gauss(0, 3.5)
+    cr = meta_of + p["creacion"] + calidad + rng.gauss(0, 3.5)
+    df = meta_de + p["defensa"] + calidad + rng.gauss(0, 3.5)
+    aj = meta_de + calidad + rng.gauss(0, 3) if pos == "ARQ" else rng.uniform(10, 25)
+    res = rng.gauss(68, 9) - (8 if edad >= 33 else 0)
+    nombre, apellido = generar_nombre(rng, usados, apellidos_club)
+    pos2 = rng.choice(SECUNDARIAS[pos]) if pos in SECUNDARIAS and rng.random() < 0.35 else None
+    return Jugador(nombre, apellido, pos, edad, at, cr, df, aj, _clip(res, 35, 95), pos2=pos2)
+
+
+def metas(ataque, defensa):
+    """Nivel ofensivo y defensivo de un club, a partir de su fuerza en el modelo."""
+    return PROMEDIO + ataque / K, PROMEDIO - defensa / K
+
+
 def generar_plantel(ataque, defensa, rng, usados=None):
     """Genera 24 jugadores cuyo equipo titular tiene la fuerza pedida
     (ataque y defensa en la escala del modelo: 0 = promedio de la liga)."""
     usados = set() if usados is None else usados
-    meta_of = PROMEDIO + ataque / K
-    meta_de = PROMEDIO - defensa / K
+    meta_of, meta_de = metas(ataque, defensa)
     plantel = []
     apellidos_club = set()
     for pos, cantidad in COMPOSICION.items():
@@ -331,20 +371,8 @@ def generar_plantel(ataque, defensa, rng, usados=None):
             edad = round(rng.triangular(19, 37, 28)) if pos == "ARQ" \
                 else round(rng.triangular(18, 35, 26))
             calidad = (4, 0, -5)[min(i, 2)] + rng.gauss(0, 3)
-            if edad <= 21:
-                calidad -= 5
-            elif edad >= 33:
-                calidad -= 2
-            p = PERFIL[pos]
-            at = meta_of + p["ataque"] + calidad + rng.gauss(0, 3.5)
-            cr = meta_of + p["creacion"] + calidad + rng.gauss(0, 3.5)
-            df = meta_de + p["defensa"] + calidad + rng.gauss(0, 3.5)
-            aj = meta_de + calidad + rng.gauss(0, 3) if pos == "ARQ" else rng.uniform(10, 25)
-            res = rng.gauss(68, 9) - (8 if edad >= 33 else 0)
-            nombre, apellido = generar_nombre(rng, usados, apellidos_club)
-            pos2 = rng.choice(SECUNDARIAS[pos]) if pos in SECUNDARIAS and rng.random() < 0.35 else None
-            plantel.append(Jugador(nombre, apellido, pos, edad, at, cr, df, aj,
-                                   _clip(res, 35, 95), pos2=pos2))
+            plantel.append(generar_jugador(pos, edad, meta_of, meta_de, calidad, rng,
+                                           usados, apellidos_club))
 
     # Ajuste fino: el equipo titular tiene que dar exactamente la fuerza pedida
     for _ in range(5):
@@ -357,20 +385,48 @@ def generar_plantel(ataque, defensa, rng, usados=None):
             if j.pos == "ARQ":
                 j.atajada += d_de
     for j in plantel:
-        j.ataque, j.creacion = round(_clip(j.ataque)), round(_clip(j.creacion))
-        j.defensa, j.atajada = round(_clip(j.defensa)), round(_clip(j.atajada, 10))
-        j.resistencia = round(j.resistencia)
-        # Potencial: hasta dónde puede llegar (los jóvenes tienen margen)
-        if j.edad <= 21:
-            extra = rng.randint(6, 22)
-        elif j.edad <= 25:
-            extra = rng.randint(2, 11)
-        elif j.edad <= 29:
-            extra = rng.randint(0, 4)
-        else:
-            extra = 0
-        j.potencial = min(99, nivel(j) + extra)
+        _redondear(j)
+        j.potencial = _potencial(j, rng)
     return plantel
+
+
+# ---------------------------------------------------------------- temporadas
+# Al terminar una temporada todos cumplen un año. Desde los 31 empiezan a
+# bajar, desde los 34 se pueden retirar, y por cada retirado sube un
+# juvenil de la cantera para el mismo puesto.
+EDAD_RETIRO = 34          # los arqueros duran 2 años más
+EDAD_RETIRO_SEGURO = 40
+
+
+def pasar_temporada(plantel, ataque, defensa, rng, usados):
+    """Envejece el plantel. ataque y defensa: la fuerza del club en el modelo,
+    que define el nivel de los juveniles. Devuelve (retirados, juveniles)."""
+    meta_of, meta_de = metas(ataque, defensa)
+    retirados, juveniles = [], []
+    for j in list(plantel):
+        j.edad += 1
+        j.fisico, j.lesion = 1.0, 0
+        extra = 2 if j.pos == "ARQ" else 0
+        if j.edad >= 31 + extra:
+            baja = rng.uniform(0.5, 1.5) * (j.edad - 30 - extra)
+            j.ataque, j.creacion = j.ataque - baja, j.creacion - baja
+            j.defensa, j.atajada = j.defensa - baja, j.atajada - baja
+            j.resistencia -= rng.uniform(1, 3)
+            _redondear(j)
+            j.potencial = min(j.potencial, nivel(j))
+        prob = 0.15 * (j.edad - EDAD_RETIRO - extra + 1)
+        if j.edad >= EDAD_RETIRO_SEGURO + extra or (prob > 0 and rng.random() < prob):
+            plantel.remove(j)
+            retirados.append(j)
+    apellidos_club = {j.apellido for j in plantel}
+    for viejo in retirados:
+        nuevo = generar_jugador(viejo.pos, rng.randint(17, 21), meta_of, meta_de,
+                                rng.gauss(-6, 4), rng, usados, apellidos_club)
+        _redondear(nuevo)
+        nuevo.potencial = _potencial(nuevo, rng)
+        plantel.append(nuevo)
+        juveniles.append(nuevo)
+    return retirados, juveniles
 
 
 # ---------------------------------------------------------------- entrenamiento
