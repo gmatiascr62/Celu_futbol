@@ -128,7 +128,27 @@ no se borra cuando se baja una versión nueva.
   los más caros.
 - Los clubes de la computadora compran lo que más les falta, venden si les
   pagan bien y fichan libres para completar el plantel. Un jugador que
-  llega a un club no se vuelve a vender en la misma ventana.
+  llega a un club no se vuelve a vender en la misma ventana. Por sus tres
+  figuras piden el doble, y los que tienen la caja llena traen refuerzos
+  del exterior.
+
+### Contratos
+
+- Cada jugador tiene un contrato de 1 a 4 temporadas (los jóvenes firman
+  por más años) con un sueldo pactado.
+- Al fichar a alguien, primero arreglás con el club y después con el
+  jugador, que pide un sueldo. Podés aceptar, ofrecerle otro (acepta desde
+  el 90% de lo que pide) o dejarlo. Si no hay acuerdo, se cae el pase.
+- En la pretemporada, a los que se les terminó el contrato los renovás o
+  se van libres. También podés renovar antes de tiempo desde el mercado
+  (opción 7, Contratos).
+- Con un año de contrato un jugador vale menos, porque su club lo puede
+  perder gratis. Liberar a alguien cuesta la mitad de lo que le queda por
+  cobrar.
+- Los otros clubes renuevan a los que les sirven; los demás quedan libres
+  y otro club los puede fichar.
+- El DT avisa cuando a un titular le queda un año de contrato, y pide
+  vender a los que no usa y cobran mucho.
 
 ## Archivos
 

@@ -24,35 +24,33 @@ plata, compras, ventas y si sigue o no en el cargo son tuyas.
   hacen los otros clubes.
 - **1.2**: DT con nombre, prestigio, sueldo, contrato y ánimo; reuniones
   con promesas, ultimátums y renuncias; despidos en los otros clubes.
+- **1.3**: contratos con sueldo pactado, negociación al fichar y renovar,
+  vencimientos y jugadores que se van libres; refuerzos del exterior para
+  los clubes grandes; el DT avisa de contratos y de los que no usa.
 
 ## Próximo
 
 Orden sugerido:
 
-1. **Contratos** (punto 1): cierran el mercado de pases y hacen falta
-   antes del ascenso, porque al subir o bajar de categoría cambian los
-   sueldos que se pueden pagar.
-2. **El ascenso** (punto 4): lo más grande que queda.
-3. **Fundar un club** (punto 5), sobre el ascenso.
-4. **Que el DT hable con IA** (punto 3), opcional, cuando quieras.
+1. **El ascenso** (punto 4): lo más grande que queda.
+2. **Fundar un club** (punto 5), sobre el ascenso.
+3. **Que el DT hable con IA** (punto 3), opcional, cuando quieras.
 
 Lo que falta del DT (punto 2) y las ideas del final se pueden ir metiendo
 en el medio.
 
 ### 1. Mercado de pases: lo que falta
-La primera parte ya está (1.1). Queda:
+Ya están el mercado (1.1) y los contratos (1.3). Queda:
 
-- Contratos con años de duración: renovaciones, jugadores que se van
-  libres y pretensiones de sueldo que se negocian.
 - Que los ingresos se muevan con los resultados y la cantidad de socios.
 - Ventas al exterior también de los clubes de la computadora, con
   reemplazos para que la liga no pierda nivel.
 - Préstamos.
 
 ### 2. DT con estado de ánimo: lo que falta
-La primera parte ya está (1.2). Queda:
+Ya está la primera parte (1.2) y en la 1.3 pide vender a los que no usa.
+Queda:
 
-- Que el DT pida vender o dejar ir a jugadores que no usa.
 - Que opine sobre el entrenamiento y la formación, y que se enoje si se
   los cambiás.
 - DT con historial: títulos, clubes por los que pasó, y que el prestigio
