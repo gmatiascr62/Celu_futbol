@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-SIMULADOR DE FÚTBOL — 1.1
+SIMULADOR DE FÚTBOL — 1.2
 El partido se juega minuto a minuto con un modelo de Poisson entrenado con
 partidos reales (ver entrenar_modelo.py). Cada equipo puede tener un DT con
 IA que cambia la táctica según el resultado y el tiempo que queda.
@@ -24,6 +24,10 @@ bajan y se retiran, y suben juveniles de la cantera.
 Hay mercado de pases (ver mercado.py): cada club tiene caja, ingresos y
 sueldos, y el mercado abre en la pretemporada y a mitad del torneo.
 
+Los DT son personas (ver tecnicos.py): tienen nombre, prestigio, sueldo,
+contrato y ánimo. El de tu club te pide reuniones, se acuerda de lo que le
+prometiste y puede renunciar; a los de los otros clubes los echan.
+
 Uso:
     python simulador_futbol.py                     # usa modelo_poisson.json
     python simulador_futbol.py otro_modelo.json    # usa otro modelo
@@ -42,6 +46,7 @@ from dataclasses import asdict, dataclass
 
 import jugadores as J
 import mercado as M
+import tecnicos as T
 
 ANCHO = 40  # ancho de las líneas, pensado para pantalla de celular
 
@@ -167,6 +172,7 @@ class Equipo:
     formacion: str = J.FORMACION_BASE  # la usa el equipo sin DT
     caja: float = 0.0                  # millones de dólares
     ingreso: float = 0.0               # ingreso anual, millones de dólares
+    moral: float = 1.0                 # multiplica los goles: la confianza del DT
 
 
 PLANTELES = {}   # se cargan de planteles.json
@@ -617,7 +623,7 @@ def simular_partido(local, visitante, modelo, mostrar=True, semilla=None,
         fz = {k: J.fuerza(cancha[k], formacion[k]) for k in "LV"}
         mu_l = math.exp(modelo["base"] + modelo["localia"] + fz["L"][0] + fz["V"][1])
         mu_v = math.exp(modelo["base"] + fz["V"][0] + fz["L"][1])
-        return {"L": mu_l, "V": mu_v}
+        return {"L": mu_l * local.moral, "V": mu_v * visitante.moral}
 
     def creacion(k):
         campo = [j.creacion * j.energia for j, s in cancha[k] if s != "ARQ"]
@@ -1049,7 +1055,9 @@ def guardar_partida(p):
                  tabla={n: dict(f) for n, f in p["tabla"].items()},
                  goleadores=[[j, c, n] for (j, c), n in p["goleadores"].items()],
                  libres=[asdict(j) for j in p["libres"]],
-                 ofertas=[[c, j.completo, m] for c, j, m in p["ofertas"]])
+                 ofertas=[[c, j.completo, m] for c, j, m in p["ofertas"]],
+                 tecnicos={c: T.a_dict(t) for c, t in p["tecnicos"].items()},
+                 dts_libres=[T.a_dict(t) for t in p["dts_libres"]])
     ruta = ruta_partida()
     with open(ruta + ".tmp", "w", encoding="utf-8") as f:
         json.dump(datos, f, ensure_ascii=False)
@@ -1082,6 +1090,12 @@ def cargar_partida():
     datos.setdefault("ventana", None)
     datos.setdefault("movimientos", [])
     datos.setdefault("sondeos", {})
+    # las partidas de antes de los DT con ánimo arrancan con DT nuevos
+    if "tecnicos" in datos:
+        datos["tecnicos"] = {c: T.de_dict(d) for c, d in datos["tecnicos"].items()}
+        datos["dts_libres"] = [T.de_dict(d) for d in datos["dts_libres"]]
+    else:
+        iniciar_tecnicos(datos)
     return datos
 
 
@@ -1124,6 +1138,7 @@ def nueva_partida(modelo):
          "semilla": random.randrange(10 ** 9), "historial": [],
          "libres": [], "ofertas": [], "ventana": None, "movimientos": [], "sondeos": {}}
     empezar_temporada(p)
+    iniciar_tecnicos(p)
     return p
 
 
@@ -1135,6 +1150,8 @@ def empezar_temporada(p):
     p["tabla"] = {e.nombre: Counter(PJ=0) for e in p["equipos"]}
     p["goleadores"] = Counter()
     p["numero"] = 0
+    if "tecnicos" in p:
+        arrancar_temporada_dt(p)
 
 
 def cerrar_temporada(p):
@@ -1154,6 +1171,7 @@ def cerrar_temporada(p):
     cambios = {}
     for e in p["equipos"]:
         cambios[e.nombre] = J.pasar_temporada(e.plantel, e.ataque, e.defensa, rng, usados)
+    contratos_dt(p)
     return cambios
 
 
@@ -1190,7 +1208,11 @@ def torneo_largo(modelo):
     def jugar_fecha(con_relato):
         nonlocal informe
         abrir_ventana(p)       # por si se saltea la fecha en que abre el mercado
+        cierra = ventana_actual(p)  # la ventana que se cierra al jugar esta fecha
         fixture, tabla, semilla = p["fixture"], p["tabla"], p["semilla"]
+        for e in equipos:
+            e.moral = T.moral(p["tecnicos"].get(e.nombre))
+        marcadores = {}
         fecha = fixture[p["numero"]]
         p["numero"] += 1
         numero = p["numero"]
@@ -1208,6 +1230,7 @@ def torneo_largo(modelo):
                                             mostrar=es_mio and con_relato,
                                             semilla=f"{clave}|{l}|{v}")
             anotar(tabla, local, visitante, gl, gv)
+            marcadores[local.nombre], marcadores[visitante.nombre] = (gl, gv), (gv, gl)
             for lado, j, _ in stats["goles"]:
                 p["goleadores"][(j.corto, (local if lado == "L" else visitante).nombre)] += 1
             resultados.append((es_mio, f"{local.nombre[:15]} {gl}-{gv} {visitante.nombre[:15]}"))
@@ -1222,6 +1245,7 @@ def torneo_largo(modelo):
             if e.nombre == mio:
                 informe = (plan, mejoras, lesionados, plan_mio is None)
         M.cobrar_fecha(equipos, len(fixture))
+        tras_fecha_dt(p, marcadores, cierra)
         guardar_partida(p)
         return resultados
 
@@ -1243,6 +1267,13 @@ def torneo_largo(modelo):
             continue
         abrir_ventana(p)
         abierto = ventana_actual(p) is not None
+        if mio and not p["sin_dt"]:
+            if p["reunion"]:
+                mostrar_reunion(p)
+                guardar_partida(p)
+            if p["tecnicos"].get(mio) is None:
+                contratar_dt(p)
+                guardar_partida(p)
         print(f"\n--- Fecha {p['numero'] + 1} de {total} · Temporada {p['temporada']} ---")
         print("1) Jugar fecha  2) Jugar 5 fechas")
         print("3) Jugar hasta el final  4) Ver tabla")
@@ -1250,6 +1281,8 @@ def torneo_largo(modelo):
         print("7) Entrenamiento  8) Mi plantel\n9) Historial" if mio else "9) Historial")
         if mio:
             print("10) Mercado de pases " + ("(abierto)" if abierto else "(cerrado)"))
+            if not p["sin_dt"]:
+                print("11) Mi DT")
         opcion = input("> ").strip()
         if opcion == "1":
             resultados = jugar_fecha(con_relato=True)
@@ -1260,12 +1293,18 @@ def torneo_largo(modelo):
             resumen_mio()
             if informe:
                 mostrar_entrenamiento(mio, *informe)
+            mostrar_noticias(p)
         elif opcion in ("2", "3"):
             hasta = total if opcion == "3" else min(total, p["numero"] + 5)
             while p["numero"] < hasta:
                 resultados = jugar_fecha(con_relato=False)
                 propio = [r for es_mio, r in resultados if es_mio]
                 print(f"Fecha {p['numero']}: " + (propio[0] if propio else "jugada"))
+                mostrar_noticias(p)
+                # se corta si tu DT quiere hablar de algo grave
+                if p["reunion"] and p["reunion"]["prioridad"] >= 80:
+                    print("📣 Tu DT pidió una reunión urgente.")
+                    break
             resumen_mio()
         elif opcion == "4":
             mostrar_tabla(p["tabla"])
@@ -1286,6 +1325,9 @@ def torneo_largo(modelo):
             J.mostrar_plantel(mio, next(e for e in equipos if e.nombre == mio).plantel)
         elif opcion == "9":
             mostrar_historial(p)
+        elif opcion == "11" and mio and not p["sin_dt"]:
+            menu_dt(p)
+            guardar_partida(p)
         elif opcion == "10" and mio:
             if abierto:
                 menu_mercado(p)
@@ -1297,6 +1339,288 @@ def torneo_largo(modelo):
                     mostrar_movimientos(p)
         else:
             print("Elegí una opción de la lista.")
+
+
+# ---------------------------------------------------------------- técnicos
+# Cada club tiene un DT con nombre, prestigio, sueldo, contrato y ánimo
+# (ver tecnicos.py). El de tu club te pide reuniones; los de los otros
+# clubes pueden ser echados si la presión es insoportable.
+PRIORIDAD = {"renuncia": 100, "promesa": 90, "ultimatum": 80, "venta": 70,
+             "racha": 60, "refuerzo": 50, "renovacion": 95, "regular": 10}
+
+
+def fuerza_titular(e):
+    niveles = sorted((J.nivel(j) for j in e.plantel), reverse=True)[:11]
+    return sum(niveles) / len(niveles)
+
+
+def calcular_esperado(p):
+    orden = sorted(p["equipos"], key=fuerza_titular, reverse=True)
+    p["esperado"] = {e.nombre: i for i, e in enumerate(orden, 1)}
+
+
+def iniciar_tecnicos(p):
+    """Un DT para cada club. Los grandes tienen DT de más prestigio."""
+    rng = random.Random(f"{p['semilla']}|tecnicos")
+    calcular_esperado(p)
+    usados = set()
+    p["tecnicos"] = {}
+    total = len(p["equipos"])
+    for e in p["equipos"]:
+        if e.dt is None:          # sin DT: táctica fija
+            continue
+        prestigio = T.prestigio_para(p["esperado"][e.nombre], total, rng)
+        p["tecnicos"][e.nombre] = T.nuevo(rng, usados, e.dt, prestigio)
+        e.ingreso += p["tecnicos"][e.nombre].sueldo   # el club ya contaba con pagarle
+    p["dts_libres"] = []
+    T.bolsa_libres(p["dts_libres"], rng, usados)
+    p["sin_dt"] = bool(p["mio"]) and p["mio"] not in p["tecnicos"]
+    p.update(reunion=None, noticias=[], fichajes_ventana=[],
+             ultimos={e.nombre: "" for e in p["equipos"]}, prox_reunion=4)
+
+
+def arrancar_temporada_dt(p):
+    calcular_esperado(p)
+    p["ultimos"] = {e.nombre: "" for e in p["equipos"]}
+    p["prox_reunion"] = 4
+    for t in p["tecnicos"].values():
+        if t:
+            t.presion = 40.0
+    usados = {t.completo for t in p["tecnicos"].values() if t}
+    T.bolsa_libres(p["dts_libres"], random.Random(f"{p['semilla']}|{p['temporada']}|dts"),
+                   usados)
+
+
+def proponer(p, reunion, tema):
+    """Deja una reunión pendiente con tu DT, si es más importante que la que
+    ya había."""
+    reunion["prioridad"] = PRIORIDAD[tema]
+    actual = p["reunion"]
+    if actual is None or reunion["prioridad"] >= actual["prioridad"]:
+        p["reunion"] = reunion
+
+
+def mi_dt(p):
+    return p["tecnicos"].get(p["mio"]) if p["mio"] else None
+
+
+def pedido_de_refuerzo(p, abierta=None):
+    """El puesto más flojo, el nivel que tiene hoy y la ventana en que se
+    tiene que cumplir si se le promete."""
+    mi = next(e for e in p["equipos"] if e.nombre == p["mio"])
+    pos, actual = M.necesidad(mi)
+    ventana = T.proxima_ventana(p["temporada"], p["numero"], len(p["fixture"]), abierta)
+    return mi, pos, round(actual), ventana
+
+
+def pedido_de_mercado(p, clave):
+    """Cuando abre el mercado, el DT pide lo que más le falta."""
+    t = mi_dt(p)
+    if t is None:
+        return
+    mi, pos, nivel, ventana = pedido_de_refuerzo(p, clave)
+    if any(pr["ventana"] == clave for pr in t.promesas):
+        return
+    costo = 1.2 * math.exp(0.13 * (nivel + 3 - 70))
+    rng = random.Random(f"{p['semilla']}|{clave}|pedido")
+    proponer(p, T.reunion_refuerzo(t, rng, pos, nivel, mi.caja, costo, ventana, True),
+             "refuerzo")
+
+
+def aviso_venta(p, mi, j):
+    """Si vendés a un titular, el DT se entera (y no le gusta)."""
+    t = mi_dt(p)
+    if t is None or id(j) not in M.titulares(mi):
+        return
+    rng = random.Random(f"{p['semilla']}|venta|{j.completo}")
+    proponer(p, T.reunion_venta(t, rng, j.corto, j.pos, p["ventana"]), "venta")
+
+
+def reemplazar_dt(p, e, rng, motivo):
+    """Un club de la computadora cambia de DT: se queda con el libre que
+    mejor le cuadra según su tamaño."""
+    viejo = p["tecnicos"].get(e.nombre)
+    total = len(p["equipos"])
+    buscado = T.prestigio_para(p["esperado"][e.nombre], total, rng)
+    candidatos = [t for t in p["dts_libres"] if t.ultimo_club != e.nombre]
+    nuevo = min(candidatos, key=lambda t: abs(t.prestigio - buscado) + rng.random() * 5)
+    p["dts_libres"].remove(nuevo)
+    T.reiniciar(nuevo)
+    p["tecnicos"][e.nombre] = nuevo
+    e.dt = nuevo.personalidad
+    e.formacion = formacion_preferida(f"{e.nombre}|{nuevo.apellido}", e.dt)
+    if viejo:
+        T.reiniciar(viejo)
+        viejo.ultimo_club = e.nombre
+        p["dts_libres"].append(viejo)
+        p["noticias"].append(f"📰 {e.nombre} {motivo} a {viejo.completo}. "
+                             f"Asume {nuevo.completo} ({nuevo.personalidad}).")
+
+
+def tras_fecha_dt(p, marcadores, cierra):
+    """Después de cada fecha: ánimo de todos los DT, despidos en los otros
+    clubes, y lo que te quiere plantear el tuyo."""
+    p["noticias"] = []
+    rng = random.Random(f"{p['semilla']}|{p['temporada']}|{p['numero']}|dt")
+    jugadas = p["numero"]
+    for e in p["equipos"]:
+        gf, gc = marcadores.get(e.nombre, (0, 0))
+        p["ultimos"][e.nombre] = (p["ultimos"][e.nombre] +
+                                  ("G" if gf > gc else "E" if gf == gc else "P"))[-10:]
+        t = p["tecnicos"].get(e.nombre)
+        if t is None:
+            continue
+        T.tras_partido(t, gf, gc)
+        puesto = posicion(p["tabla"], e.nombre)[0]
+        T.actualizar_presion(t, puesto, p["esperado"][e.nombre], p["ultimos"][e.nombre],
+                             jugadas)
+        if e.nombre != p["mio"] and T.lo_echan(t, rng):
+            reemplazar_dt(p, e, rng, "echó")
+    # sueldos de los DT
+    for e in p["equipos"]:
+        t = p["tecnicos"].get(e.nombre)
+        if t:
+            e.caja -= t.sueldo / len(p["fixture"])
+    t = mi_dt(p)
+    if t is None:
+        return
+    mi, pos, nivel, ventana = pedido_de_refuerzo(p)
+    # promesas de la ventana que acaba de cerrar
+    if cierra:
+        for pos_p, ok in T.revisar_promesas(t, cierra, p["fichajes_ventana"]):
+            proponer(p, T.reunion_promesa(t, rng, pos_p, ok), "promesa")
+    if t.satisfaccion < T.RENUNCIA:
+        proponer(p, T.reunion_renuncia(t, rng), "renuncia")
+        return
+    if t.satisfaccion < T.ULTIMATUM and "ultimatum" not in t.avisos:
+        t.avisos.append("ultimatum")
+        proponer(p, T.reunion_ultimatum(t, rng, pos, nivel, ventana), "ultimatum")
+        return
+    if t.satisfaccion > 50 and "ultimatum" in t.avisos:
+        t.avisos.remove("ultimatum")
+    ultimos = p["ultimos"][mi.nombre]
+    sin_ganar = len(ultimos) - len(ultimos.rstrip("EP"))
+    sin_perder = len(ultimos) - len(ultimos.rstrip("GE"))
+    if sin_ganar in (3, 5, 7):
+        proponer(p, T.reunion_racha(t, rng, sin_ganar, True, pos, nivel, ventana), "racha")
+    elif sin_perder in (5, 8) and ultimos.endswith("G"):
+        proponer(p, T.reunion_racha(t, rng, sin_perder, False, pos, nivel, ventana), "racha")
+    elif jugadas >= p["prox_reunion"]:
+        p["prox_reunion"] = jugadas + rng.randint(3, 5)
+        juveniles = [j for j in mi.plantel if j.edad <= 21 and j.potencial - J.nivel(j) >= 8
+                     and id(j) not in M.titulares(mi)
+                     and f"juvenil:{j.completo}" not in t.avisos]
+        prometido = any(pr["pos"] == pos for pr in t.promesas)
+        opciones = (["juvenil"] if juveniles else []) + ([] if prometido else ["refuerzo"])
+        # si no hay nada puntual, a veces pasa a charlar y a veces no
+        tema = rng.choice(opciones) if opciones and rng.random() < 0.7 else "general"
+        if tema == "general" and rng.random() < 0.5:
+            return
+        if tema == "juvenil":
+            j = max(juveniles, key=lambda j: j.potencial)
+            t.avisos.append(f"juvenil:{j.completo}")
+            reunion = T.reunion_juvenil(t, rng, j)
+        elif tema == "refuerzo":
+            costo = 1.2 * math.exp(0.13 * (nivel + 3 - 70))
+            reunion = T.reunion_refuerzo(t, rng, pos, nivel, mi.caja, costo, ventana, False)
+        else:
+            reunion = T.reunion_general(t, rng)
+        proponer(p, reunion, "regular")
+
+
+def contratos_dt(p):
+    """Fin de temporada: se descuenta un año de contrato. En los otros
+    clubes renuevan si la cosa anduvo bien; con el tuyo se habla."""
+    rng = random.Random(f"{p['semilla']}|{p['temporada']}|contratos")
+    for e in p["equipos"]:
+        t = p["tecnicos"].get(e.nombre)
+        if t is None:
+            continue
+        t.contrato -= 1
+        if t.contrato > 0:
+            continue
+        if e.nombre == p["mio"]:
+            proponer(p, T.reunion_renovacion(t, rng, round(t.sueldo * 1.1, 3)), "renovacion")
+        elif t.presion < 60:
+            t.contrato = 2
+        else:
+            reemplazar_dt(p, e, rng, "no le renovó")
+
+
+def mostrar_reunion(p):
+    r, t = p["reunion"], mi_dt(p)
+    p["reunion"] = None
+    if t is None:
+        return
+    print("\n" + "=" * ANCHO)
+    print(f"📣 Reunión con tu DT, {t.completo}")
+    print("=" * ANCHO)
+    print(textwrap.fill(f"«{r['texto']}»", ANCHO))
+    if r["tema"] in ("renuncia", "no_renueva"):
+        input("\nEnter para seguir...")
+        se_va_mi_dt(p)
+        return
+    if not r["opciones"]:
+        input("\nEnter para seguir...")
+        return
+    for i, (texto, *_) in enumerate(r["opciones"], 1):
+        print(textwrap.fill(f"{i}) {texto}", ANCHO, subsequent_indent="   "))
+    n = pedir_numero("> ", 1, len(r["opciones"]))
+    extra, respuesta = T.aplicar(t, r["opciones"][n - 1])
+    print(textwrap.fill(f"«{respuesta}»", ANCHO))
+    if extra and "renovar" in extra:
+        if extra["renovar"]:
+            t.contrato = extra["renovar"]
+            t.aumento = round(t.aumento * 1.1, 3)
+            print(f"Renovó por {t.contrato} temporadas.")
+        else:
+            se_va_mi_dt(p)
+
+
+def se_va_mi_dt(p):
+    t = mi_dt(p)
+    T.reiniciar(t)
+    t.ultimo_club = p["mio"]
+    p["dts_libres"].append(t)
+    p["tecnicos"][p["mio"]] = None
+    print(f"{t.completo} ya no es el DT de {p['mio']}.")
+
+
+def contratar_dt(p):
+    mi = next(e for e in p["equipos"] if e.nombre == p["mio"])
+    libres = sorted((t for t in p["dts_libres"] if t.ultimo_club != mi.nombre),
+                    key=lambda t: -t.prestigio)[:6]
+    print(f"\n=== {mi.nombre} necesita DT ===")
+    for i, t in enumerate(libres, 1):
+        print(f"{i}. {t.completo}, {t.edad} años")
+        print(f"   {t.personalidad} · prestigio {t.prestigio} · {M.plata(t.sueldo)}/año")
+    t = libres[pedir_numero("¿A quién contratás? ", 1, len(libres)) - 1]
+    p["dts_libres"].remove(t)
+    T.reiniciar(t)
+    p["tecnicos"][mi.nombre] = t
+    mi.dt = t.personalidad
+    mi.formacion = formacion_preferida(f"{mi.nombre}|{t.apellido}", t.personalidad)
+    print(f"✅ {t.completo} es el nuevo DT de {mi.nombre} ({t.personalidad}, "
+          f"prefiere el {mi.formacion}).")
+
+
+def menu_dt(p):
+    t = mi_dt(p)
+    T.mostrar(t, p["mio"])
+    costo = t.sueldo * max(t.contrato, 0.5)
+    print(f"\n1) Volver  2) Echarlo (cuesta {M.plata(costo)})")
+    if input("> ").strip() == "2":
+        print("¿Seguro? (s/n)")
+        if input("> ").strip().lower() == "s":
+            next(e for e in p["equipos"] if e.nombre == p["mio"]).caja -= costo
+            p["reunion"] = None
+            se_va_mi_dt(p)
+            contratar_dt(p)
+
+
+def mostrar_noticias(p):
+    for texto in p.get("noticias", []):
+        print(textwrap.fill(texto, ANCHO, subsequent_indent="   "))
 
 
 # ---------------------------------------------------------------- mercado de pases
@@ -1315,6 +1639,7 @@ def abrir_ventana(p):
     if clave is None or p["ventana"] == clave:
         return
     p["ventana"] = clave
+    p["fichajes_ventana"] = []
     rng = random.Random(f"{p['semilla']}|mercado|{clave}")
     equipos = p["equipos"]
     usados = {j.completo for e in equipos for j in e.plantel}
@@ -1324,6 +1649,7 @@ def abrir_ventana(p):
     p["movimientos"] = M.movimientos_ia(equipos, p["mio"], p["libres"], rng)
     p["ofertas"] = M.ofertas_por_mios(equipos, p["mio"], rng) if p["mio"] else []
     p["sondeos"] = {}
+    pedido_de_mercado(p, clave)
     guardar_partida(p)
     if p["mio"]:
         print(f"\n🔁 Se abrió el mercado de pases: {len(p['movimientos'])} movimientos"
@@ -1449,6 +1775,7 @@ def comprar(p, mi):
         print(f"{vendedor.nombre} rechaza la oferta. Pide {M.plata(monto)}.")
         return
     M.transferir(j, vendedor, mi, monto)
+    p["fichajes_ventana"].append([j.pos, J.nivel(j)])
     p["movimientos"].append(f"{j.corto} ({j.pos}, {J.nivel(j)}): {vendedor.nombre} → "
                             f"{mi.nombre}, {M.plata(monto)}")
     print(f"✅ ¡{j.completo} es nuevo jugador de {mi.nombre}! ({M.plata(monto)})")
@@ -1473,6 +1800,7 @@ def fichar_libres(p, mi):
     j = libres[k]
     aviso_sueldos(mi, M.sueldo(j))
     M.fichar_libre(j, mi, p["libres"])
+    p["fichajes_ventana"].append([j.pos, J.nivel(j)])
     p["movimientos"].append(f"{j.corto} ({j.pos}, {J.nivel(j)}): libre → {mi.nombre}")
     print(f"✅ Firmó {j.completo}.")
 
@@ -1494,6 +1822,7 @@ def ofertas_recibidas(p, mi):
         if j not in mi.plantel or not M.puede_vender(mi, j):
             print("No podés venderlo: te quedás corto de plantel o sin nadie en el puesto.")
             return
+        aviso_venta(p, mi, j)
         M.vender(j, mi, club, p["equipos"], monto)
         p["movimientos"].append(f"{j.corto} ({j.pos}, {J.nivel(j)}): {mi.nombre} → "
                                 f"{club}, {M.plata(monto)}")
@@ -1535,6 +1864,7 @@ def vender(p, mi, rng):
     if k is None:
         return
     club, monto = ofertas[k]
+    aviso_venta(p, mi, j)
     M.vender(j, mi, club, p["equipos"], monto)
     p["movimientos"].append(f"{j.corto} ({j.pos}, {J.nivel(j)}): {mi.nombre} → "
                             f"{club}, {M.plata(monto)}")
@@ -1640,7 +1970,7 @@ def ver_plantel(modelo):
 
 def main():
     global PLANTELES
-    print("SIMULADOR DE FÚTBOL — 1.1")
+    print("SIMULADOR DE FÚTBOL — 1.2")
     ruta = sys.argv[1] if len(sys.argv) > 1 else "modelo_poisson.json"
     modelo = cargar_modelo(ruta)
     PLANTELES = J.cargar_planteles(modelo)

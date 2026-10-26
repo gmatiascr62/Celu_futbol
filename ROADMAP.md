@@ -22,6 +22,8 @@ plata, compras, ventas y si sigue o no en el cargo son tuyas.
 - **1.1**: mercado de pases: valores, sueldos, caja e ingresos, dos
   ventanas por temporada, ofertas (también del exterior), libres y lo que
   hacen los otros clubes.
+- **1.2**: DT con nombre, prestigio, sueldo, contrato y ánimo; reuniones
+  con promesas, ultimátums y renuncias; despidos en los otros clubes.
 
 ## Próximo
 
@@ -35,18 +37,15 @@ La primera parte ya está (1.1). Queda:
   reemplazos para que la liga no pierda nivel.
 - Préstamos.
 
-### 2. DT con estado de ánimo
-El "cerebro" del DT en código, sin internet.
+### 2. DT con estado de ánimo: lo que falta
+La primera parte ya está (1.2). Queda:
 
-- Satisfacción con la dirigencia, confianza en el plantel y presión por
-  resultados, en números que cambian con los partidos y con lo que le
-  respondés.
-- Entre fechas te habla: pide refuerzos según lo que le falta al equipo,
-  se queja de una racha mala, quiere subir a un pibe de la cantera.
-- Le contestás desde un menú, y él reacciona según cómo lo tratás.
-- Si la satisfacción llega muy abajo, renuncia. También lo podés echar y
-  contratar otro, con otra personalidad.
-- Frases armadas con muchas variantes.
+- Que el DT pida vender o dejar ir a jugadores que no usa.
+- Que opine sobre el entrenamiento y la formación, y que se enoje si se
+  los cambiás.
+- DT con historial: títulos, clubes por los que pasó, y que el prestigio
+  suba o baje según cómo le va.
+- Que la hinchada y la presión de los medios también cuenten.
 
 ### 3. Que el DT hable con IA (opcional)
 Sobre el punto 2, un modelo de lenguaje (Gemini con su nivel gratis, o

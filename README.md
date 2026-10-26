@@ -70,6 +70,24 @@ no se borra cuando se baja una versión nueva.
   da. Hace los cambios según el cansancio y el resultado: perdiendo mete
   delanteros, ganando mete defensores.
 
+### El DT de tu club (torneo largo)
+
+- Cada DT tiene nombre, edad, personalidad, prestigio, sueldo y contrato.
+- Su ánimo son tres números de 0 a 100 (opción 11): **satisfacción** con
+  vos, **confianza** en el plantel (sube y baja con los resultados) y
+  **presión** (según lo que se espera del club y la racha).
+- Cada 4 o 5 fechas, y cuando pasa algo, te pide una reunión: refuerzos
+  para el puesto más flojo, rachas buenas y malas, un pibe que está para
+  jugar, la venta de un titular, ultimátums, la renovación del contrato.
+  Le contestás eligiendo una respuesta y cada una cambia su ánimo.
+- Las promesas se anotan: si le prometés un refuerzo y cierra el mercado
+  sin que llegue, se enoja mucho más.
+- Si la satisfacción llega muy abajo, renuncia. También lo podés echar
+  (pagando lo que le queda de contrato) y elegir otro de los DT libres.
+- La confianza mueve hasta un 3% los goles del equipo.
+- A los DT de los otros clubes los echan si la presión es insoportable, y
+  te enterás por las noticias.
+
 ### Los jugadores
 
 - 24 jugadores ficticios por club en 10 posiciones (ARQ, DFC, LD, LI, MCD,
@@ -119,6 +137,7 @@ no se borra cuando se baja una versión nueva.
 | `simulador_futbol.py` | El juego: partido, DT, cuadrangular, torneo largo y menú. |
 | `jugadores.py` | Jugadores, posiciones, formaciones, planteles, entrenamiento y temporadas. |
 | `mercado.py` | Valores, sueldos, finanzas de los clubes y mercado de pases. |
+| `tecnicos.py` | Los DT como personas: ánimo, reuniones, promesas y despidos. |
 | `modelo_poisson.json` | El modelo de goles entrenado con la liga argentina. |
 | `dt_ia.json` | Lo que aprendieron los DT. |
 | `planteles.json` | Los planteles de los 32 clubes. |
