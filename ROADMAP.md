@@ -27,6 +27,18 @@ plata, compras, ventas y si sigue o no en el cargo son tuyas.
 
 ## Próximo
 
+Orden sugerido:
+
+1. **Contratos** (punto 1): cierran el mercado de pases y hacen falta
+   antes del ascenso, porque al subir o bajar de categoría cambian los
+   sueldos que se pueden pagar.
+2. **El ascenso** (punto 4): lo más grande que queda.
+3. **Fundar un club** (punto 5), sobre el ascenso.
+4. **Que el DT hable con IA** (punto 3), opcional, cuando quieras.
+
+Lo que falta del DT (punto 2) y las ideas del final se pueden ir metiendo
+en el medio.
+
 ### 1. Mercado de pases: lo que falta
 La primera parte ya está (1.1). Queda:
 
@@ -48,8 +60,11 @@ La primera parte ya está (1.2). Queda:
 - Que la hinchada y la presión de los medios también cuenten.
 
 ### 3. Que el DT hable con IA (opcional)
-Sobre el punto 2, un modelo de lenguaje (Gemini con su nivel gratis, o
-Claude) redacta lo que dice el DT y entiende lo que le escribís libremente.
+Ya se puede hacer, porque las reuniones del punto 2 están armadas: cada
+una tiene un tema, las opciones y lo que cambia en el ánimo del DT. Un
+modelo de lenguaje (Gemini con su nivel gratis, o Claude) redactaría lo
+que dice el DT con su personalidad, y entendería lo que le escribís
+libremente para elegir cuál de las opciones es.
 
 - El código pone las reglas: el modelo solo pone las palabras y no puede
   inventar plata ni jugadores. Contesta en un formato fijo que el
@@ -127,7 +142,7 @@ categorías. La idea es estimarla:
 
 ### 5. Fundar un club
 Arrancar de cero con un club propio y subirlo categoría por categoría.
-Necesita el ascenso (punto 4) y el mercado de pases (punto 1).
+Necesita el ascenso (punto 4). El mercado de pases y los DT ya están.
 
 - **Identidad**: nombre, apodo, ciudad o barrio, colores y nombre de la
   cancha. El nombre aparece en el relato y en las tablas como cualquier
@@ -144,8 +159,9 @@ Necesita el ascenso (punto 4) y el mercado de pases (punto 1).
   jugadores. Más adelante se puede invertir en la cancha, en las
   divisiones inferiores (mejores juveniles) o en el predio de
   entrenamiento (entrenan mejor).
-- **El primer DT**: lo elegís vos de una lista de DT sin club, cada uno
-  con su personalidad, su pretensión de sueldo y su humor (punto 2).
+- **El primer DT**: lo elegís de la lista de DT sin club, como ya se hace
+  cuando renuncia o lo echás, pero solo vas a poder pagar los de poco
+  prestigio.
 - **Partida propia**: la temporada se guarda igual que ahora, con el
   historial del club desde su fundación: ascensos, títulos, goleadores
   históricos e ídolos.
