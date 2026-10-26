@@ -124,6 +124,31 @@ categorías. La idea es estimarla:
   o con clubes inventados en las categorías de abajo.
 - Formato de cada categoría: el de este año o uno fijo que no cambie.
 
+### 5. Fundar un club
+Arrancar de cero con un club propio y subirlo categoría por categoría.
+Necesita el ascenso (punto 4) y el mercado de pases (punto 1).
+
+- **Identidad**: nombre, apodo, ciudad o barrio, colores y nombre de la
+  cancha. El nombre aparece en el relato y en las tablas como cualquier
+  otro club.
+- **Dónde arranca**: en la categoría más baja que tenga el juego. Si es
+  del interior, por el Regional Amateur y el Federal; si es de Buenos
+  Aires, por la Primera D o la C. El club nuevo entra en lugar de uno de
+  esa categoría, o se agrega uno más si el formato lo permite.
+- **El primer plantel**: jugadores libres y pibes del barrio, flojos y
+  baratos, con algunas joyas de potencial alto escondidas. Una parte se
+  arma en una "prueba de jugadores" donde elegís a quiénes fichar.
+- **Plata**: un presupuesto inicial chico. Después crece con los
+  resultados, los ascensos, la cantidad de socios y la venta de
+  jugadores. Más adelante se puede invertir en la cancha, en las
+  divisiones inferiores (mejores juveniles) o en el predio de
+  entrenamiento (entrenan mejor).
+- **El primer DT**: lo elegís vos de una lista de DT sin club, cada uno
+  con su personalidad, su pretensión de sueldo y su humor (punto 2).
+- **Partida propia**: la temporada se guarda igual que ahora, con el
+  historial del club desde su fundación: ascensos, títulos, goleadores
+  históricos e ídolos.
+
 ## Ideas para más adelante
 
 - **El DT juega según la tabla**: en la última fecha sabe si le alcanza el
