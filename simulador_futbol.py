@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-SIMULADOR DE FÚTBOL — 0.8
+SIMULADOR DE FÚTBOL — 0.9
 El partido se juega minuto a minuto con un modelo de Poisson entrenado con
 partidos reales (ver entrenar_modelo.py). Cada equipo puede tener un DT con
 IA que cambia la táctica según el resultado y el tiempo que queda.
@@ -11,6 +11,11 @@ jugando cientos de miles de partidos. Si no, usan el DT calculador.
 Cada club tiene un plantel de 24 jugadores ficticios (ver jugadores.py),
 que se guarda en planteles.json. El DT elige formación y titulares según
 el rival, y hace los cambios según el cansancio y el resultado.
+
+En el torneo largo, entre fecha y fecha cada club entrena: los jugadores
+suben de nivel hacia su potencial (más rápido los jóvenes). El de tu club
+lo elegís vos o lo decide el DT; entrenar fuerte rinde más, pero cansa y
+puede traer lesiones.
 
 Uso:
     python simulador_futbol.py                     # usa modelo_poisson.json
@@ -472,14 +477,14 @@ def elegir_alineacion(eq, rival, modelo, es_local, rng):
     """El DT prueba cada formación con sus mejores 11 contra el rival y se
     queda con la que más puntos le da, según su personalidad."""
     if not eq.dt:
-        return eq.formacion, J.armar_xi(eq.plantel, eq.formacion)
+        return eq.formacion, J.armar_xi(J.aptos(eq.plantel), eq.formacion)
     f_rival = rival.formacion if not rival.dt else J.FORMACION_BASE
-    ra, rd, *_ = J.fuerza(J.armar_xi(rival.plantel, f_rival), f_rival)
+    ra, rd, *_ = J.fuerza(J.armar_xi(J.aptos(rival.plantel), f_rival), f_rival)
     p = PERSONALIDADES[eq.dt]
     localia = modelo["localia"]
     opciones = []
     for f in J.FORMACIONES:
-        xi = J.armar_xi(eq.plantel, f)
+        xi = J.armar_xi(J.aptos(eq.plantel), f)
         a, d, *_ = J.fuerza(xi, f)
         mu_f = math.exp(modelo["base"] + (localia if es_local else 0) + a + rd) * ESCALA
         mu_c = math.exp(modelo["base"] + (0 if es_local else localia) + ra + d) * ESCALA
@@ -573,7 +578,7 @@ def simular_partido(local, visitante, modelo, mostrar=True, semilla=None,
         f, xi = elegir_alineacion(eq[k], eq[otro[k]], modelo, k == "L", rng)
         formacion[k], cancha[k] = f, xi
         en_cancha = {id(j) for j, _ in xi}
-        banco[k] = [j for j in eq[k].plantel if id(j) not in en_cancha]
+        banco[k] = [j for j in J.aptos(eq[k].plantel) if id(j) not in en_cancha]
         jugaron[k] = [j for j, _ in xi]
         for j in eq[k].plantel:
             j.energia = j.fisico
@@ -949,6 +954,66 @@ def anotar(tabla, local, visitante, gl, gv):
             f["P"] += 1
 
 
+# Intensidad que elige cada DT cuando el plantel está bien físicamente
+INTENSIDAD_DT = {"equilibrado": "normal", "conservador": "suave",
+                 "arriesgado": "fuerte", None: "normal"}
+
+
+def plan_dt(eq, rng):
+    """El DT elige el entrenamiento de la semana: si el plantel está cansado
+    descansa, y si no, trabaja lo que más le falta al equipo."""
+    sanos = [j for j in eq.plantel if not j.lesion]
+    fisico = sum(j.fisico for j in sanos) / len(sanos)
+    if fisico < 0.85:
+        return "descanso", "suave"
+    if eq.dt == "impulsivo":
+        return (rng.choice(("completo", "ataque", "defensa", "fisico")),
+                rng.choice(list(J.INTENSIDADES)))
+    intensidad = INTENSIDAD_DT[eq.dt]
+    if intensidad == "fuerte" and fisico < 0.92:
+        intensidad = "normal"
+    a, d, *_ = J.fuerza(J.armar_xi(J.aptos(eq.plantel), J.FORMACION_BASE, False))
+    if a < -d - 0.05:
+        return "ataque", intensidad
+    if -d < a - 0.05:
+        return "defensa", intensidad
+    return "completo", intensidad
+
+
+def pedir_entrenamiento():
+    """El plan de entrenamiento de tu club. None = lo decide el DT."""
+    print("\n--- Entrenamiento ---")
+    tipos = list(J.TIPOS_ENTRENAMIENTO)
+    print("0) Que lo decida el DT")
+    for i, t in enumerate(tipos, 1):
+        print(f"{i}) {t} ({J.TIPOS_ENTRENAMIENTO[t]})")
+    n = pedir_numero("Tipo [0]: ", 0, len(tipos), defecto=0)
+    if n == 0:
+        return None
+    tipo = tipos[n - 1]
+    if tipo == "descanso":
+        return tipo, "suave"
+    print("1) suave (sube poco, llegan frescos)")
+    print("2) normal")
+    print("3) fuerte (sube más, cansa y hay")
+    print("   riesgo de lesiones)")
+    n = pedir_numero("Intensidad [2]: ", 1, len(J.INTENSIDADES), defecto=2)
+    intensidad = list(J.INTENSIDADES)[n - 1]
+    return tipo, intensidad
+
+
+def mostrar_entrenamiento(club, plan, mejoras, lesionados, del_dt):
+    tipo, intensidad = plan
+    quien = "elegido por el DT" if del_dt else "elegido por vos"
+    print(f"\n🏋 Entrenamiento de {club}: {tipo}"
+          + (f" ({intensidad})" if tipo != "descanso" else "") + f", {quien}")
+    if mejoras:
+        texto = "Suben: " + ", ".join(f"{j.corto} {a}→{b}" for j, a, b in mejoras)
+        print(textwrap.fill(texto, ANCHO, subsequent_indent="  "))
+    for j, n in lesionados:
+        print(f"🚑 Se lesionó {j.corto}: {n} fecha{'s' if n > 1 else ''} afuera")
+
+
 def posicion(tabla, nombre):
     for i, (n, f) in enumerate(ordenar_tabla(tabla), 1):
         if n == nombre:
@@ -999,9 +1064,12 @@ def torneo_largo(modelo):
     tabla = {e.nombre: Counter(PJ=0) for e in equipos}
     goleadores = Counter()
     numero = 0
+    plan_mio = None            # None = el entrenamiento lo decide el DT
+    informe = None             # lo que pasó en el último entrenamiento de tu club
+    rng_entreno = random.Random(f"{semilla}|entrenamiento")
 
     def jugar_fecha(con_relato):
-        nonlocal numero
+        nonlocal numero, informe
         fecha = fixture[numero]
         numero += 1
         resultados = []
@@ -1020,9 +1088,14 @@ def torneo_largo(modelo):
             for lado, j, _ in stats["goles"]:
                 goleadores[(j.corto, (local if lado == "L" else visitante).nombre)] += 1
             resultados.append((es_mio, f"{local.nombre[:15]} {gl}-{gv} {visitante.nombre[:15]}"))
+        # Recuperación y entrenamiento de la semana
         for e in equipos:
             for j in e.plantel:
                 j.fisico = min(1.0, j.fisico + RECUPERO_FECHA)
+            plan = plan_mio if e.nombre == mio and plan_mio else plan_dt(e, rng_entreno)
+            mejoras, lesionados = J.entrenar(e.plantel, *plan, rng_entreno)
+            if e.nombre == mio:
+                informe = (plan, mejoras, lesionados, plan_mio is None)
         return resultados
 
     def resumen_mio():
@@ -1036,6 +1109,8 @@ def torneo_largo(modelo):
         print("1) Jugar fecha  2) Jugar 5 fechas")
         print("3) Jugar hasta el final  4) Ver tabla")
         print("5) Goleadores  6) Abandonar torneo")
+        if mio:
+            print("7) Entrenamiento  8) Mi plantel")
         opcion = input("> ").strip()
         if opcion == "1":
             resultados = jugar_fecha(con_relato=True)
@@ -1044,6 +1119,8 @@ def torneo_largo(modelo):
             for es_mio, r in resultados:
                 print(("► " if es_mio else "  ") + r)
             resumen_mio()
+            if informe:
+                mostrar_entrenamiento(mio, *informe)
         elif opcion in ("2", "3"):
             hasta = len(fixture) if opcion == "3" else min(len(fixture), numero + 5)
             while numero < hasta:
@@ -1057,8 +1134,16 @@ def torneo_largo(modelo):
             mostrar_goleadores(goleadores, 10)
         elif opcion == "6":
             return
+        elif opcion == "7" and mio:
+            plan_mio = pedir_entrenamiento()
+            if plan_mio:
+                print(f"Plan: {plan_mio[0]} ({plan_mio[1]}) todas las semanas.")
+            else:
+                print("El DT decide el entrenamiento cada semana.")
+        elif opcion == "8" and mio:
+            J.mostrar_plantel(mio, next(e for e in equipos if e.nombre == mio).plantel)
         else:
-            print("Elegí del 1 al 6.")
+            print(f"Elegí del 1 al {8 if mio else 6}.")
 
     mostrar_tabla(tabla)
     mostrar_goleadores(goleadores, 10)
@@ -1111,7 +1196,7 @@ def ver_plantel(modelo):
 
 def main():
     global PLANTELES
-    print("SIMULADOR DE FÚTBOL — 0.8")
+    print("SIMULADOR DE FÚTBOL — 0.9")
     ruta = sys.argv[1] if len(sys.argv) > 1 else "modelo_poisson.json"
     modelo = cargar_modelo(ruta)
     PLANTELES = J.cargar_planteles(modelo)

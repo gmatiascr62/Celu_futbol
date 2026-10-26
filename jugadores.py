@@ -220,6 +220,7 @@ class Jugador:
     forma: float = 1.0
     fisico: float = 1.0     # cómo llega al partido (1 = descansado)
     energia: float = 1.0    # durante el partido
+    lesion: int = 0         # fechas que le quedan afuera por lesión
 
     @property
     def completo(self):
@@ -291,6 +292,13 @@ def fuerza(xi, formacion=None):
 
 
 ORDEN_SLOTS = ("ARQ", "DC", "DFC", "MCD", "LD", "LI", "MCO", "ED", "EI", "MC")
+
+
+def aptos(plantel):
+    """Los que pueden jugar (sin lesión). Si faltan para armar un equipo,
+    juegan todos."""
+    sanos = [j for j in plantel if not j.lesion]
+    return sanos if len(sanos) >= 16 else list(plantel)
 
 
 def armar_xi(plantel, formacion, con_fisico=True):
@@ -365,11 +373,81 @@ def generar_plantel(ataque, defensa, rng, usados=None):
     return plantel
 
 
+# ---------------------------------------------------------------- entrenamiento
+# Entre fecha y fecha cada club entrena. El nivel sube hacia el potencial,
+# más rápido cuanto más joven es el jugador y más fuerte el entrenamiento.
+# Entrenar fuerte rinde más, pero llegan más cansados y se pueden lesionar.
+TIPOS_ENTRENAMIENTO = {
+    "completo": "un poco de todo",
+    "ataque": "ataque y creación",
+    "defensa": "defensa y atajada",
+    "fisico": "resistencia",
+    "descanso": "recuperar energía",
+}
+# progreso, físico que suma o resta, chance de lesión por jugador
+INTENSIDADES = {"suave": (0.5, 0.06, 0.0),
+                "normal": (1.0, 0.0, 0.004),
+                "fuerte": (1.7, -0.07, 0.012)}
+RITMO = 0.008             # parte del margen hasta el potencial que gana por fecha
+RITMO_RESISTENCIA = 0.15  # puntos de resistencia por fecha (entrenando físico)
+RECUPERO_DESCANSO = 0.12
+# Qué atributos mejora cada tipo (en los arqueros, la atajada)
+ATRIBUTOS = {"completo": ("ataque", "creacion", "defensa"),
+             "ataque": ("ataque", "creacion"), "defensa": ("defensa",)}
+ENFOQUE = 1.5             # entrenar algo puntual rinde más en eso
+
+
+def ritmo_edad(edad):
+    return 1.4 if edad <= 21 else 1.0 if edad <= 25 else 0.6 if edad <= 29 else 0.3
+
+
+def entrenar(plantel, tipo, intensidad, rng):
+    """Una semana de entrenamiento. Devuelve (mejoras, lesionados):
+    mejoras = [(jugador, nivel antes, nivel después)] de los que subieron
+    al menos un punto; lesionados = [(jugador, fechas afuera)]."""
+    progreso, fisico, riesgo = INTENSIDADES[intensidad]
+    if tipo == "descanso":
+        progreso, fisico, riesgo = 0.0, RECUPERO_DESCANSO, 0.0
+    mejoras, lesionados = [], []
+    for j in plantel:
+        if j.lesion:
+            j.lesion -= 1
+            continue
+        j.fisico = max(0.5, min(1.0, j.fisico + fisico))
+        if tipo == "fisico":
+            j.resistencia = min(95, j.resistencia + RITMO_RESISTENCIA * progreso
+                                * ritmo_edad(j.edad) * rng.uniform(0.5, 1.5))
+        elif progreso:
+            if j.pos == "ARQ":
+                attrs = ("atajada",) if tipo != "ataque" else ()
+            else:
+                attrs = ATRIBUTOS[tipo]
+            antes = puntaje(j, j.pos, con_fisico=False)
+            margen = j.potencial - antes
+            if attrs and margen > 0:
+                paso = (RITMO * progreso * ritmo_edad(j.edad) * margen
+                        * rng.uniform(0.5, 1.5) * (1 if tipo == "completo" else ENFOQUE))
+                for a in attrs:
+                    setattr(j, a, min(99, getattr(j, a) + paso))
+                # el nivel nunca pasa el potencial
+                subio = puntaje(j, j.pos, con_fisico=False) - antes
+                if subio > margen:
+                    for a in attrs:
+                        setattr(j, a, getattr(j, a) - paso * (1 - margen / subio))
+                if nivel(j) > round(antes):
+                    mejoras.append((j, round(antes), nivel(j)))
+        if riesgo and rng.random() < riesgo:
+            j.lesion = rng.choice((1, 1, 2, 2, 3, 4))
+            lesionados.append((j, j.lesion))
+    return mejoras, lesionados
+
+
 # ---------------------------------------------------------------- archivo
 def _a_dict(j):
     d = asdict(j)
     d.pop("fisico")
     d.pop("energia")
+    d.pop("lesion")
     return d
 
 
@@ -408,5 +486,10 @@ def mostrar_plantel(nombre_club, plantel):
         df = j.atajada if j.pos == "ARQ" else j.defensa
         pos = j.pos + ("*" if j.pos2 else "")
         print(f"{pos:<4}{j.corto[:14]:<15}{j.edad:>3}{nivel(j):>4}{j.potencial:>4}"
-              f"{j.ataque:>4}{j.creacion:>4}{df:>4}{j.resistencia:>4}")
+              f"{j.ataque:>4.0f}{j.creacion:>4.0f}{df:>4.0f}{j.resistencia:>4.0f}")
     print("(* = juega también en otra posición. En arqueros, Df = atajada)")
+    lesionados = [j for j in plantel if j.lesion]
+    if lesionados:
+        print("Lesionados: " + ", ".join(
+            f"{j.corto} ({j.lesion} fecha{'s' if j.lesion > 1 else ''})"
+            for j in lesionados))
