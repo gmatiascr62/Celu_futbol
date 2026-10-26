@@ -19,19 +19,21 @@ plata, compras, ventas y si sigue o no en el cargo son tuyas.
 - **0.9**: entrenamiento entre fechas y lesiones.
 - **1.0**: partida guardada y temporadas seguidas (edad, retiros y
   juveniles).
+- **1.1**: mercado de pases: valores, sueldos, caja e ingresos, dos
+  ventanas por temporada, ofertas (también del exterior), libres y lo que
+  hacen los otros clubes.
 
 ## Próximo
 
-### 1. Mercado de pases
-Lo que hace falta para que el DT tenga qué pedir.
+### 1. Mercado de pases: lo que falta
+La primera parte ya está (1.1). Queda:
 
-- Presupuesto del club, según su tamaño, y que se mueva con los
-  resultados.
-- Valor de mercado y sueldo de cada jugador, según nivel, potencial y edad.
-- Comprar y vender entre fechas, o en ventanas de pases entre temporadas
-  y a mitad de temporada.
-- Los otros clubes también compran y venden, con su lógica.
-- Contratos con años de duración y jugadores libres.
+- Contratos con años de duración: renovaciones, jugadores que se van
+  libres y pretensiones de sueldo que se negocian.
+- Que los ingresos se muevan con los resultados y la cantidad de socios.
+- Ventas al exterior también de los clubes de la computadora, con
+  reemplazos para que la liga no pierda nivel.
+- Préstamos.
 
 ### 2. DT con estado de ánimo
 El "cerebro" del DT en código, sin internet.

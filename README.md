@@ -20,8 +20,8 @@ Menú principal:
    simular 1000 partidos para ver las probabilidades o cambiar los DT.
 2. **Cuadrangular**: 4 equipos, todos contra todos, ida y vuelta.
 3. **Torneo largo**: los 32 clubes, ida y vuelta (62 fechas). Seguís a un
-   club, elegís su DT y su entrenamiento, y podés jugar temporadas seguidas.
-   Se guarda solo después de cada fecha.
+   club, elegís su DT y su entrenamiento, comprás y vendés jugadores, y
+   podés jugar temporadas seguidas. Se guarda solo después de cada fecha.
 4. **Ver plantel**: la ficha de los 24 jugadores de cada club.
 
 Los equipos se eligen escribiendo parte del nombre (`boca`), con un número
@@ -95,12 +95,30 @@ no se borra cuando se baja una versión nueva.
   un juvenil de la cantera. Hay un historial de campeones.
 - **Partida guardada**: `partida.json`, después de cada fecha.
 
+### Mercado de pases
+
+- La plata está en millones de dólares. Cada jugador tiene un valor según
+  su nivel, su edad y su potencial, y cobra un sueldo del 18% de ese valor
+  por año.
+- Cada club tiene caja e ingresos anuales, según su tamaño. Los sueldos se
+  pagan fecha a fecha, y a fin de temporada hay premios según el puesto.
+- El mercado abre en la pretemporada y a mitad del torneo (opción 10).
+  Podés buscar jugadores de otros clubes y ofertar (el club acepta, pide
+  más o rechaza), fichar libres, vender, liberar (con indemnización) y ver
+  todos los movimientos.
+- Te llegan ofertas por tus jugadores, también de clubes del exterior por
+  los más caros.
+- Los clubes de la computadora compran lo que más les falta, venden si les
+  pagan bien y fichan libres para completar el plantel. Un jugador que
+  llega a un club no se vuelve a vender en la misma ventana.
+
 ## Archivos
 
 | Archivo | Qué es |
 |---|---|
 | `simulador_futbol.py` | El juego: partido, DT, cuadrangular, torneo largo y menú. |
 | `jugadores.py` | Jugadores, posiciones, formaciones, planteles, entrenamiento y temporadas. |
+| `mercado.py` | Valores, sueldos, finanzas de los clubes y mercado de pases. |
 | `modelo_poisson.json` | El modelo de goles entrenado con la liga argentina. |
 | `dt_ia.json` | Lo que aprendieron los DT. |
 | `planteles.json` | Los planteles de los 32 clubes. |

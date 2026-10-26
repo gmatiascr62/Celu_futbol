@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-SIMULADOR DE FÚTBOL — 1.0
+SIMULADOR DE FÚTBOL — 1.1
 El partido se juega minuto a minuto con un modelo de Poisson entrenado con
 partidos reales (ver entrenar_modelo.py). Cada equipo puede tener un DT con
 IA que cambia la táctica según el resultado y el tiempo que queda.
@@ -21,6 +21,9 @@ El torneo largo se guarda solo después de cada fecha (partida.json) y se
 pueden jugar temporadas seguidas: los jugadores cumplen años, los veteranos
 bajan y se retiran, y suben juveniles de la cantera.
 
+Hay mercado de pases (ver mercado.py): cada club tiene caja, ingresos y
+sueldos, y el mercado abre en la pretemporada y a mitad del torneo.
+
 Uso:
     python simulador_futbol.py                     # usa modelo_poisson.json
     python simulador_futbol.py otro_modelo.json    # usa otro modelo
@@ -38,6 +41,7 @@ from collections import Counter
 from dataclasses import asdict, dataclass
 
 import jugadores as J
+import mercado as M
 
 ANCHO = 40  # ancho de las líneas, pensado para pantalla de celular
 
@@ -161,6 +165,8 @@ class Equipo:
     energia: float = 1.0               # promedio de los 10 de campo
     plantel: list | None = None
     formacion: str = J.FORMACION_BASE  # la usa el equipo sin DT
+    caja: float = 0.0                  # millones de dólares
+    ingreso: float = 0.0               # ingreso anual, millones de dólares
 
 
 PLANTELES = {}   # se cargan de planteles.json
@@ -1041,7 +1047,9 @@ def guardar_partida(p):
     datos = dict(p, version=VERSION_PARTIDA,
                  equipos=[asdict(e) for e in p["equipos"]],
                  tabla={n: dict(f) for n, f in p["tabla"].items()},
-                 goleadores=[[j, c, n] for (j, c), n in p["goleadores"].items()])
+                 goleadores=[[j, c, n] for (j, c), n in p["goleadores"].items()],
+                 libres=[asdict(j) for j in p["libres"]],
+                 ofertas=[[c, j.completo, m] for c, j, m in p["ofertas"]])
     ruta = ruta_partida()
     with open(ruta + ".tmp", "w", encoding="utf-8") as f:
         json.dump(datos, f, ensure_ascii=False)
@@ -1066,6 +1074,14 @@ def cargar_partida():
     datos["tabla"] = {n: Counter(f) for n, f in datos["tabla"].items()}
     datos["goleadores"] = Counter({(j, c): n for j, c, n in datos["goleadores"]})
     datos["plan_mio"] = tuple(datos["plan_mio"]) if datos["plan_mio"] else None
+    # las partidas de antes del mercado de pases arrancan con las finanzas de cero
+    M.iniciar_finanzas(equipos)
+    datos["libres"] = [J.Jugador(**j) for j in datos.get("libres", [])]
+    mios = {j.completo: j for e in equipos if e.nombre == datos["mio"] for j in e.plantel}
+    datos["ofertas"] = [(c, mios[n], m) for c, n, m in datos.get("ofertas", []) if n in mios]
+    datos.setdefault("ventana", None)
+    datos.setdefault("movimientos", [])
+    datos.setdefault("sondeos", {})
     return datos
 
 
@@ -1103,8 +1119,10 @@ def nueva_partida(modelo):
                                   weights=list(PERSONALIDAD_AL_AZAR.values()))[0]
             e.formacion = formacion_preferida(c, e.dt)
         equipos.append(e)
+    M.iniciar_finanzas(equipos)
     p = {"equipos": equipos, "mio": mio, "plan_mio": None, "temporada": 0,
-         "semilla": random.randrange(10 ** 9), "historial": []}
+         "semilla": random.randrange(10 ** 9), "historial": [],
+         "libres": [], "ofertas": [], "ventana": None, "movimientos": [], "sondeos": {}}
     empezar_temporada(p)
     return p
 
@@ -1128,6 +1146,9 @@ def cerrar_temporada(p):
     if p["mio"]:
         registro["puesto"] = posicion(p["tabla"], p["mio"])[0]
     p["historial"].append(registro)
+    M.premios(p["equipos"], [n for n, _ in ordenar_tabla(p["tabla"])], p["mio"])
+    for j in p["libres"]:
+        j.edad += 1
     rng = random.Random(f"{p['semilla']}|{p['temporada']}|retiros")
     usados = {j.completo for e in p["equipos"] for j in e.plantel}
     cambios = {}
@@ -1168,6 +1189,7 @@ def torneo_largo(modelo):
 
     def jugar_fecha(con_relato):
         nonlocal informe
+        abrir_ventana(p)       # por si se saltea la fecha en que abre el mercado
         fixture, tabla, semilla = p["fixture"], p["tabla"], p["semilla"]
         fecha = fixture[p["numero"]]
         p["numero"] += 1
@@ -1199,6 +1221,7 @@ def torneo_largo(modelo):
             mejoras, lesionados = J.entrenar(e.plantel, *plan, rng_entreno)
             if e.nombre == mio:
                 informe = (plan, mejoras, lesionados, plan_mio is None)
+        M.cobrar_fecha(equipos, len(fixture))
         guardar_partida(p)
         return resultados
 
@@ -1207,6 +1230,10 @@ def torneo_largo(modelo):
             pos, f = posicion(p["tabla"], mio)
             print(f"\n{mio}: {pos}° con {f['Pts']} puntos "
                   f"({f['G']}G {f['E']}E {f['P']}P)")
+            print(f"Caja: {M.plata(mi_equipo().caja)}")
+
+    def mi_equipo():
+        return next(e for e in equipos if e.nombre == mio)
 
     while True:
         total = len(p["fixture"])
@@ -1214,11 +1241,15 @@ def torneo_largo(modelo):
             if not fin_de_temporada(p):
                 return
             continue
+        abrir_ventana(p)
+        abierto = ventana_actual(p) is not None
         print(f"\n--- Fecha {p['numero'] + 1} de {total} · Temporada {p['temporada']} ---")
         print("1) Jugar fecha  2) Jugar 5 fechas")
         print("3) Jugar hasta el final  4) Ver tabla")
         print("5) Goleadores  6) Guardar y salir")
         print("7) Entrenamiento  8) Mi plantel\n9) Historial" if mio else "9) Historial")
+        if mio:
+            print("10) Mercado de pases " + ("(abierto)" if abierto else "(cerrado)"))
         opcion = input("> ").strip()
         if opcion == "1":
             resultados = jugar_fecha(con_relato=True)
@@ -1255,8 +1286,278 @@ def torneo_largo(modelo):
             J.mostrar_plantel(mio, next(e for e in equipos if e.nombre == mio).plantel)
         elif opcion == "9":
             mostrar_historial(p)
+        elif opcion == "10" and mio:
+            if abierto:
+                menu_mercado(p)
+                guardar_partida(p)
+            else:
+                print(f"El mercado está cerrado. Abre en la pretemporada y "
+                      f"antes de la fecha {total // 2 + 1}. Caja: {M.plata(mi_equipo().caja)}")
+                if p["movimientos"]:
+                    mostrar_movimientos(p)
         else:
             print("Elegí una opción de la lista.")
+
+
+# ---------------------------------------------------------------- mercado de pases
+def ventana_actual(p):
+    """Clave de la ventana de pases abierta ahora, o None si está cerrado.
+    Abre antes de la primera fecha y a mitad del torneo."""
+    if p["numero"] in (0, len(p["fixture"]) // 2):
+        return f"{p['temporada']}-{p['numero']}"
+    return None
+
+
+def abrir_ventana(p):
+    """La primera vez que se llega a una ventana, los otros clubes hacen sus
+    movimientos y le llegan ofertas al club que seguís."""
+    clave = ventana_actual(p)
+    if clave is None or p["ventana"] == clave:
+        return
+    p["ventana"] = clave
+    rng = random.Random(f"{p['semilla']}|mercado|{clave}")
+    equipos = p["equipos"]
+    usados = {j.completo for e in equipos for j in e.plantel}
+    usados |= {j.completo for j in p["libres"]}
+    viejos = [j for j in p["libres"] if j.edad < 35][-30:]
+    p["libres"] = viejos + M.generar_libres(equipos, rng, usados, M.nivel_medio(equipos))
+    p["movimientos"] = M.movimientos_ia(equipos, p["mio"], p["libres"], rng)
+    p["ofertas"] = M.ofertas_por_mios(equipos, p["mio"], rng) if p["mio"] else []
+    p["sondeos"] = {}
+    guardar_partida(p)
+    if p["mio"]:
+        print(f"\n🔁 Se abrió el mercado de pases: {len(p['movimientos'])} movimientos"
+              + (f", {len(p['ofertas'])} ofertas por tus jugadores" if p["ofertas"] else "")
+              + ". Opción 10.")
+
+
+def mostrar_movimientos(p):
+    print("\n--- Movimientos del mercado ---")
+    for texto in p["movimientos"] or ["Ninguno."]:
+        print(textwrap.fill(texto, ANCHO, subsequent_indent="   "))
+
+
+def pedir_monto(texto, defecto):
+    raw = input(texto).strip().replace(",", ".")
+    if not raw:
+        return defecto
+    try:
+        return max(0.0, float(raw))
+    except ValueError:
+        return 0.0
+
+
+def linea_jugador(i, j, extra=""):
+    """Dos líneas por jugador, para que entre en la pantalla del celular."""
+    print(f"{i:>2}. {j.pos:<3} {j.corto[:16]:<17}{j.edad}a Nv{J.nivel(j)} Pot{j.potencial}")
+    if extra:
+        print(f"    {extra}")
+
+
+def elegir_de_lista(cantidad, texto="Número (Enter = volver): "):
+    raw = input(texto).strip()
+    if raw.isdigit() and 1 <= int(raw) <= cantidad:
+        return int(raw) - 1
+    return None
+
+
+def pedir_posicion():
+    raw = input("Posición (ARQ, DFC, LD, LI, MCD, MC,\n"
+                "MCO, ED, EI, DC; Enter = todas): ").strip().upper()
+    return raw if raw in J.POSICIONES else None
+
+
+def aviso_sueldos(mi, extra):
+    masa = M.masa_salarial(mi.plantel) + extra
+    if masa > mi.ingreso:
+        print(f"Ojo: los sueldos ({M.plata(masa)}/año) van a superar tus "
+              f"ingresos ({M.plata(mi.ingreso)}/año).")
+
+
+def menu_mercado(p):
+    equipos, mio = p["equipos"], p["mio"]
+    mi = next(e for e in equipos if e.nombre == mio)
+    rng = random.Random(f"{p['semilla']}|{p['ventana']}|sondeos")
+    while True:
+        print("\n=== MERCADO DE PASES ===")
+        print(f"Caja: {M.plata(mi.caja)} · Plantel: {len(mi.plantel)}")
+        print(f"Ingresos: {M.plata(mi.ingreso)}/año")
+        print(f"Sueldos: {M.plata(M.masa_salarial(mi.plantel))}/año")
+        print("1) Buscar jugadores  2) Libres")
+        print(f"3) Ofertas recibidas ({len(p['ofertas'])})  4) Vender")
+        print("5) Liberar  6) Movimientos  7) Volver")
+        opcion = input("> ").strip()
+        if opcion == "1":
+            comprar(p, mi)
+        elif opcion == "2":
+            fichar_libres(p, mi)
+        elif opcion == "3":
+            ofertas_recibidas(p, mi)
+        elif opcion == "4":
+            vender(p, mi, rng)
+        elif opcion == "5":
+            liberar(p, mi)
+        elif opcion == "6":
+            mostrar_movimientos(p)
+        elif opcion == "7":
+            return
+        else:
+            print("Elegí del 1 al 7.")
+
+
+def comprar(p, mi):
+    pos = pedir_posicion()
+    candidatos = [(j, e) for e in p["equipos"] if e is not mi for j in e.plantel
+                  if pos is None or j.pos == pos]
+    candidatos.sort(key=lambda x: -J.nivel(x[0]))
+    candidatos = candidatos[:12]
+    tits = {}
+    print()
+    for i, (j, e) in enumerate(candidatos, 1):
+        if e.nombre not in tits:
+            tits[e.nombre] = M.titulares(e)
+        precio = M.precio_pedido(e, j, tits[e.nombre])
+        linea_jugador(i, j, f"{e.nombre[:20]} · piden {M.plata(precio)}")
+    k = elegir_de_lista(len(candidatos))
+    if k is None:
+        return
+    j, vendedor = candidatos[k]
+    if len(mi.plantel) >= M.PLANTEL_MAX:
+        print(f"Tenés {M.PLANTEL_MAX} jugadores: vendé o liberá a alguno antes.")
+        return
+    if not M.puede_vender(vendedor, j):
+        print(f"{vendedor.nombre} no lo vende: se queda corto en el puesto.")
+        return
+    pedido = M.precio_pedido(vendedor, j)
+    print(f"\n{j.completo} ({j.pos}, {j.edad} años, nivel {J.nivel(j)})")
+    print(f"Valor: {M.plata(M.valor(j))} · Sueldo: {M.plata(M.sueldo(j))}/año")
+    print(f"{vendedor.nombre} pide {M.plata(pedido)}.")
+    aviso_sueldos(mi, M.sueldo(j))
+    oferta = pedir_monto("Tu oferta en millones (Enter = lo que\npiden): ", pedido)
+    if oferta > mi.caja:
+        print(f"No te alcanza: tenés {M.plata(mi.caja)}.")
+        return
+    resp, monto = M.respuesta(vendedor, j, oferta)
+    if resp == "contraoferta":
+        print(f"{vendedor.nombre} quiere {M.plata(monto)}. ¿Aceptás? (s/n)")
+        if input("> ").strip().lower() != "s":
+            return
+        if monto > mi.caja:
+            print(f"No te alcanza: tenés {M.plata(mi.caja)}.")
+            return
+    elif resp == "rechaza":
+        print(f"{vendedor.nombre} rechaza la oferta. Pide {M.plata(monto)}.")
+        return
+    M.transferir(j, vendedor, mi, monto)
+    p["movimientos"].append(f"{j.corto} ({j.pos}, {J.nivel(j)}): {vendedor.nombre} → "
+                            f"{mi.nombre}, {M.plata(monto)}")
+    print(f"✅ ¡{j.completo} es nuevo jugador de {mi.nombre}! ({M.plata(monto)})")
+
+
+def fichar_libres(p, mi):
+    pos = pedir_posicion()
+    libres = sorted((j for j in p["libres"] if pos is None or j.pos == pos),
+                    key=lambda j: -J.nivel(j))[:12]
+    if not libres:
+        print("No hay libres en ese puesto.")
+        return
+    print()
+    for i, j in enumerate(libres, 1):
+        linea_jugador(i, j, f"libre · sueldo {M.plata(M.sueldo(j))}/año")
+    k = elegir_de_lista(len(libres))
+    if k is None:
+        return
+    if len(mi.plantel) >= M.PLANTEL_MAX:
+        print(f"Tenés {M.PLANTEL_MAX} jugadores: vendé o liberá a alguno antes.")
+        return
+    j = libres[k]
+    aviso_sueldos(mi, M.sueldo(j))
+    M.fichar_libre(j, mi, p["libres"])
+    p["movimientos"].append(f"{j.corto} ({j.pos}, {J.nivel(j)}): libre → {mi.nombre}")
+    print(f"✅ Firmó {j.completo}.")
+
+
+def ofertas_recibidas(p, mi):
+    if not p["ofertas"]:
+        print("No hay ofertas por tus jugadores.")
+        return
+    print()
+    for i, (club, j, monto) in enumerate(p["ofertas"], 1):
+        linea_jugador(i, j, f"{club[:20]} ofrece {M.plata(monto)}")
+    k = elegir_de_lista(len(p["ofertas"]))
+    if k is None:
+        return
+    club, j, monto = p["ofertas"][k]
+    print(f"1) Aceptar {M.plata(monto)} por {j.corto}  2) Rechazar")
+    opcion = input("> ").strip()
+    if opcion == "1":
+        if j not in mi.plantel or not M.puede_vender(mi, j):
+            print("No podés venderlo: te quedás corto de plantel o sin nadie en el puesto.")
+            return
+        M.vender(j, mi, club, p["equipos"], monto)
+        p["movimientos"].append(f"{j.corto} ({j.pos}, {J.nivel(j)}): {mi.nombre} → "
+                                f"{club}, {M.plata(monto)}")
+        print(f"Vendido. Entran {M.plata(monto)}.")
+        p["ofertas"] = [o for o in p["ofertas"] if o[1] is not j]
+    elif opcion == "2":
+        p["ofertas"].pop(k)
+        print("Oferta rechazada.")
+
+
+def lista_propia(mi):
+    plantel = sorted(mi.plantel, key=lambda j: (J.POSICIONES.index(j.pos), -J.nivel(j)))
+    print()
+    for i, j in enumerate(plantel, 1):
+        linea_jugador(i, j, f"valor {M.plata(M.valor(j))} · sueldo {M.plata(M.sueldo(j))}")
+    return plantel
+
+
+def vender(p, mi, rng):
+    """Ponés a un jugador en venta y ves quiénes ofrecen (una vez por
+    jugador en cada ventana)."""
+    plantel = lista_propia(mi)
+    k = elegir_de_lista(len(plantel), "¿A quién ponés en venta? ")
+    if k is None:
+        return
+    j = plantel[k]
+    if not M.puede_vender(mi, j):
+        print("No podés venderlo: te quedás corto de plantel o sin nadie en el puesto.")
+        return
+    if j.completo not in p["sondeos"]:
+        p["sondeos"][j.completo] = M.ofertas_por_jugador(p["equipos"], p["mio"], j, rng)
+    ofertas = p["sondeos"][j.completo]
+    if not ofertas:
+        print(f"Nadie ofertó por {j.corto} en esta ventana.")
+        return
+    for i, (club, monto) in enumerate(ofertas, 1):
+        print(f"{i}) {club}: {M.plata(monto)}")
+    k = elegir_de_lista(len(ofertas), "¿Cuál aceptás? (Enter = ninguna) ")
+    if k is None:
+        return
+    club, monto = ofertas[k]
+    M.vender(j, mi, club, p["equipos"], monto)
+    p["movimientos"].append(f"{j.corto} ({j.pos}, {J.nivel(j)}): {mi.nombre} → "
+                            f"{club}, {M.plata(monto)}")
+    p["ofertas"] = [o for o in p["ofertas"] if o[1] is not j]
+    print(f"Vendido a {club}. Entran {M.plata(monto)}.")
+
+
+def liberar(p, mi):
+    plantel = lista_propia(mi)
+    k = elegir_de_lista(len(plantel), "¿A quién liberás? ")
+    if k is None:
+        return
+    j = plantel[k]
+    if not M.puede_vender(mi, j):
+        print("No podés: te quedás corto de plantel o sin nadie en el puesto.")
+        return
+    costo = M.INDEMNIZACION * M.sueldo(j)
+    print(f"Liberar a {j.corto} cuesta {M.plata(costo)} de indemnización. ¿Seguro? (s/n)")
+    if input("> ").strip().lower() == "s":
+        M.liberar(j, mi, p["libres"])
+        p["ofertas"] = [o for o in p["ofertas"] if o[1] is not j]
+        p["movimientos"].append(f"{j.corto} ({j.pos}, {J.nivel(j)}): {mi.nombre} lo deja libre")
+        print(f"{j.corto} quedó libre.")
 
 
 def fin_de_temporada(p):
@@ -1339,7 +1640,7 @@ def ver_plantel(modelo):
 
 def main():
     global PLANTELES
-    print("SIMULADOR DE FÚTBOL — 1.0")
+    print("SIMULADOR DE FÚTBOL — 1.1")
     ruta = sys.argv[1] if len(sys.argv) > 1 else "modelo_poisson.json"
     modelo = cargar_modelo(ruta)
     PLANTELES = J.cargar_planteles(modelo)
