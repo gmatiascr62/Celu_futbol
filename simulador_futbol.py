@@ -1,0 +1,1144 @@
+#!/usr/bin/env python3
+"""
+SIMULADOR DE FÚTBOL — 0.8
+El partido se juega minuto a minuto con un modelo de Poisson entrenado con
+partidos reales (ver entrenar_modelo.py). Cada equipo puede tener un DT con
+IA que cambia la táctica según el resultado y el tiempo que queda.
+
+Si existe dt_ia.json (ver entrenar_dt.py), los DTs usan lo que aprendieron
+jugando cientos de miles de partidos. Si no, usan el DT calculador.
+
+Cada club tiene un plantel de 24 jugadores ficticios (ver jugadores.py),
+que se guarda en planteles.json. El DT elige formación y titulares según
+el rival, y hace los cambios según el cansancio y el resultado.
+
+Uso:
+    python simulador_futbol.py                     # usa modelo_poisson.json
+    python simulador_futbol.py otro_modelo.json    # usa otro modelo
+
+No requiere librerías externas. Si no encuentra el modelo, funciona igual
+con equipos inventados y valores promedio.
+"""
+import json
+import math
+import os
+import random
+import sys
+import textwrap
+from collections import Counter
+from dataclasses import dataclass
+
+import jugadores as J
+
+ANCHO = 40  # ancho de las líneas, pensado para pantalla de celular
+
+# Valores por defecto si no hay modelo entrenado
+MODELO_VACIO = {"base": math.log(1.15), "localia": math.log(1.25),
+                "rho": -0.06, "equipos": {}}
+
+# ---------------------------------------------------------------- tácticas
+# propio: multiplica los goles que esperás meter
+# rival:  multiplica los goles que esperás recibir
+# posesion: puntos de posesión que suma
+# Defensiva baja los goles de los dos (partido cerrado, le sirve al débil).
+# Ofensiva sube los goles de los dos (partido abierto, le sirve al fuerte).
+TACTICAS = {
+    "equilibrada":  {"propio": 1.00, "rival": 1.00, "posesion": 0},
+    "ofensiva":     {"propio": 1.15, "rival": 1.08, "posesion": 4},
+    "defensiva":    {"propio": 0.85, "rival": 0.85, "posesion": -6},
+    "contraataque": {"propio": 0.95, "rival": 0.93, "posesion": -8},
+    "presion":      {"propio": 1.10, "rival": 1.03, "posesion": 6},
+    "todo_al_ataque": {"propio": 1.40, "rival": 1.35, "posesion": 8},
+}
+BONUS_CONTRA = 1.15                  # el contraataque castiga al que se adelanta
+TACTICAS_ADELANTADAS = ("ofensiva", "presion", "todo_al_ataque")
+TACTICAS_INICIALES = [t for t in TACTICAS if t != "todo_al_ataque"]
+MINUTO_TODO_AL_ATAQUE = 70           # antes de esto no se puede jugar así
+
+
+def disponibles(minuto):
+    """Tácticas que un DT puede elegir en ese minuto."""
+    if minuto >= MINUTO_TODO_AL_ATAQUE:
+        return list(TACTICAS)
+    return TACTICAS_INICIALES
+
+# ---------------------------------------------------------------- DTs
+# ganar / empatar: cuánto valora cada resultado (lo normal es 3 y 1)
+# umbral: cuánto mejor tiene que ser una táctica para que la cambie
+# error:  cuánto se equivoca al evaluar, proporcional a lo que está en
+#         juego (el impulsivo decide "a ojo")
+PERSONALIDADES = {
+    "equilibrado": {"ganar": 3.0, "empatar": 1.0, "umbral": 0.04, "error": 0.15,
+                    "desc": "decide con la cabeza fría"},
+    "conservador": {"ganar": 3.0, "empatar": 1.6, "umbral": 0.06, "error": 0.15,
+                    "desc": "un punto siempre suma"},
+    "arriesgado":  {"ganar": 3.6, "empatar": 0.6, "umbral": 0.03, "error": 0.25,
+                    "desc": "sale a ganar siempre"},
+    "impulsivo":   {"ganar": 3.0, "empatar": 1.0, "umbral": 0.02, "error": 0.80,
+                    "desc": "cambia mucho y a veces se equivoca"},
+}
+TRAMOS = (1, 15, 30, 46, 60, 70, 78, 85)   # momentos en que decide el DT
+MOMENTOS_DECISION = TRAMOS[1:]             # (el 1 es la táctica inicial)
+# además decide 2 minutos después de cada gol
+MIN_ENTRE_CAMBIOS = 8
+# Con el partido empatado los equipos arriesgan menos (corrige la cantidad
+# de empates, igual que el rho de Dixon-Coles en el modelo).
+FACTOR_EMPATE = 0.80
+# Ajuste fino: con DTs con IA en los dos equipos, la liga simulada da los mismos
+# goles y empates que la real (calibrado con la liga argentina).
+ESCALA = 1.06
+MAX_CAMBIOS_TACTICOS = 5
+
+# ---------------------------------------------------------------- energía
+# La energía del equipo va de 1 (fresco) a 0. Baja cada minuto según la
+# táctica: presionar o ir con todo cansa mucho más que defenderse.
+DESGASTE = {"equilibrada": 0.0045, "ofensiva": 0.0055, "defensiva": 0.0035,
+            "contraataque": 0.0042, "presion": 0.0072, "todo_al_ataque": 0.0085}
+RECUPERO_ENTRETIEMPO = 0.05
+ENERGIA_MINIMA = 0.30
+GANANCIA_CAMBIO = 0.12     # cada cambio recupera el 12% de la energía perdida
+CAMBIOS_PERMITIDOS = 5
+VENTANAS = 3               # momentos para hacer cambios, sin contar el entretiempo
+# Energía por debajo de la cual cada DT empieza a hacer cambios
+# Cambios mínimos hechos para cada minuto
+META_CAMBIOS = ((60, 1), (70, 3), (78, 4), (85, 5))
+UMBRAL_CAMBIO = {"equilibrado": 0.78, "conservador": 0.74, "arriesgado": 0.82,
+                 "impulsivo": 0.80, None: 0.76}
+
+
+def efecto_energia(e_propia, e_rival):
+    """Multiplica los goles esperados de un equipo: cansado ataca peor,
+    y si el rival está cansado, defiende peor."""
+    return (0.75 + 0.25 * e_propia) * (1 + 0.25 * (1 - e_rival))
+
+
+def decidir_cambios(personalidad, minuto, energia, restantes, ventanas, gf, gc,
+                    rng=None):
+    """Cuántos cambios hace el DT en este momento."""
+    if restantes == 0 or minuto < 46:
+        return 0
+    entretiempo = minuto == 46
+    if not entretiempo and ventanas == 0:
+        return 0
+    if not entretiempo and ventanas == 1 and minuto >= 70:
+        return restantes                 # última ventana: usa todos
+    umbral = UMBRAL_CAMBIO[personalidad]
+    if gf < gc:
+        umbral += 0.03                   # perdiendo, mete gente antes
+    if personalidad == "impulsivo" and rng is not None:
+        umbral += rng.uniform(-0.08, 0.08)
+    por_energia = min(2, restantes) if energia < umbral else 0
+    # Como cualquier DT, reparte los cambios a lo largo del segundo tiempo
+    usados = CAMBIOS_PERMITIDOS - restantes
+    meta = max((n for m, n in META_CAMBIOS if minuto >= m), default=0)
+    return min(restantes, max(por_energia, meta - usados))
+
+
+def aplicar_cambios(energia, cantidad):
+    for _ in range(cantidad):
+        energia += GANANCIA_CAMBIO * (1 - energia)
+    return energia
+
+
+@dataclass
+class Equipo:
+    nombre: str
+    ataque: float       # escala del modelo (log): 0 = promedio de la liga
+    defensa: float      # escala del modelo (log): negativo = recibe menos
+    tactica: str = "equilibrada"
+    tactica_inicial: str = "equilibrada"
+    dt: str | None = "equilibrado"   # None = sin DT, táctica fija
+    real: bool = True
+    energia: float = 1.0               # promedio de los 10 de campo
+    plantel: list | None = None
+    formacion: str = J.FORMACION_BASE  # la usa el equipo sin DT
+
+
+PLANTELES = {}   # se cargan de planteles.json
+
+
+# ---------------------------------------------------------------- entrada
+def pedir_numero(texto, minimo=1, maximo=100, defecto=None):
+    while True:
+        raw = input(texto).strip()
+        if not raw and defecto is not None:
+            return defecto
+        try:
+            valor = int(raw)
+            if minimo <= valor <= maximo:
+                return valor
+        except ValueError:
+            pass
+        print(f"Escribí un número entre {minimo} y {maximo}.")
+
+
+def pedir_tactica():
+    print("Tácticas:")
+    for i, t in enumerate(TACTICAS_INICIALES, 1):
+        print(f"  {i}. {t}")
+    n = pedir_numero("Táctica [1]: ", 1, len(TACTICAS_INICIALES), defecto=1)
+    return TACTICAS_INICIALES[n - 1]
+
+
+def configurar_dt(eq):
+    nombres = list(PERSONALIDADES)
+    print(f"DT de {eq.nombre}:")
+    for i, n in enumerate(nombres, 1):
+        print(f"  {i}. {n} ({PERSONALIDADES[n]['desc']})")
+    print(f"  {len(nombres) + 1}. sin DT (táctica fija)")
+    n = pedir_numero("DT [1]: ", 1, len(nombres) + 1, defecto=1)
+    if n <= len(nombres):
+        eq.dt = nombres[n - 1]
+        eq.tactica_inicial = "equilibrada"  # la define el DT al empezar
+        eq.formacion = formacion_preferida(eq.nombre, eq.dt)
+        print(f"El DT prefiere jugar con {eq.formacion}.")
+    else:
+        eq.dt = None
+        eq.tactica_inicial = pedir_tactica()
+        eq.formacion = pedir_formacion()
+
+
+# Formación preferida de cada DT (cada club tiene la suya)
+PREFERENCIAS = {"4-4-2": 25, "4-3-3": 25, "4-2-3-1": 25, "3-5-2": 12, "5-3-2": 13}
+APEGO_FORMACION = 0.04   # puntos extra que le da a su formación preferida
+
+
+def formacion_preferida(club, dt):
+    rng = random.Random(f"{club}|{dt}")
+    return rng.choices(list(PREFERENCIAS), weights=list(PREFERENCIAS.values()))[0]
+
+
+def pedir_formacion():
+    nombres = list(J.FORMACIONES)
+    print("Formaciones:")
+    for i, f in enumerate(nombres, 1):
+        print(f"  {i}. {f}")
+    n = pedir_numero("Formación [1]: ", 1, len(nombres), defecto=1)
+    return nombres[n - 1]
+
+
+def rating_a_modelo(rating):
+    """Convierte un rating 1-100 a la escala del modelo.
+    60 = equipo promedio; 90 ≈ x1.57; 30 ≈ x0.64."""
+    return (rating - 60) * 0.015
+
+
+def crear_equipo_inventado(numero):
+    nombre = input("Nombre del equipo: ").strip() or f"Equipo {numero}"
+    ataque = pedir_numero("Ataque (1-100) [60]: ", defecto=60)
+    medio = pedir_numero("Mediocampo (1-100) [60]: ", defecto=60)
+    defensa = pedir_numero("Defensa (1-100) [60]: ", defecto=60)
+    arquero = pedir_numero("Arquero (1-100) [60]: ", defecto=60)
+    fuerza_at = 0.70 * ataque + 0.30 * medio
+    fuerza_def = 0.60 * defensa + 0.25 * arquero + 0.15 * medio
+    return Equipo(nombre, rating_a_modelo(fuerza_at),
+                  -rating_a_modelo(fuerza_def), real=False)
+
+
+def buscar_club(modelo, permitir_inventado=True):
+    """Pregunta un club real de la lista. Devuelve su nombre, o None si el
+    usuario quiere inventar uno."""
+    nombres = sorted(modelo["equipos"])
+    if not nombres:
+        return None
+    print("Escribí parte del nombre, un número de la lista,")
+    print("'l' para ver la lista" + (" o '0' para inventar uno." if permitir_inventado else "."))
+    while True:
+        raw = input("Equipo: ").strip()
+        if raw == "0" and permitir_inventado:
+            return None
+        if raw.lower() == "l":
+            for i, n in enumerate(nombres, 1):
+                print(f"{i:>3}. {n}")
+            continue
+        if raw.isdigit() and 1 <= int(raw) <= len(nombres):
+            candidatos = [nombres[int(raw) - 1]]
+        else:
+            candidatos = [n for n in nombres if raw.lower() in n.lower()] if raw else []
+        if len(candidatos) == 1:
+            print(f"-> {candidatos[0]}")
+            return candidatos[0]
+        if candidatos:
+            print("Hay varios: " + ", ".join(candidatos[:8]))
+        else:
+            print("No lo encontré. Probá de nuevo o 'l' para la lista.")
+
+
+def elegir_equipo(numero, modelo, ya_elegidos=(), etiqueta=None):
+    if etiqueta is None:
+        etiqueta = "local" if numero == 1 else "visitante"
+    print(f"\n--- Equipo {numero} ({etiqueta}) ---")
+    club = buscar_club(modelo)
+    if club is None:
+        eq = crear_equipo_inventado(numero)
+    else:
+        d = modelo["equipos"][club]
+        eq = Equipo(club, d["ataque"], d["defensa"])
+        if club in PLANTELES:
+            eq.plantel = J.copiar_plantel(PLANTELES[club])
+    usados = {e.nombre for e in ya_elegidos}
+    base, n = eq.nombre, 2
+    while eq.nombre in usados:
+        eq.nombre = f"{base} ({n})"
+        n += 1
+    configurar_dt(eq)
+    return eq
+
+
+def asegurar_plantel(eq):
+    """Los equipos inventados reciben un plantel generado con su fuerza."""
+    if eq.plantel is None:
+        usados = {j.completo for p in PLANTELES.values() for j in p}
+        eq.plantel = J.generar_plantel(eq.ataque, eq.defensa,
+                                       random.Random(eq.nombre), usados)
+
+
+def reponer_fisico(*equipos):
+    for e in equipos:
+        asegurar_plantel(e)
+        for j in e.plantel:
+            j.fisico = 1.0
+
+
+# ---------------------------------------------------------------- modelo
+def goles_base(local, visitante, modelo):
+    """Goles esperados en 90 minutos con tácticas equilibradas."""
+    mu_l = math.exp(modelo["base"] + modelo["localia"]
+                    + local.ataque + visitante.defensa)
+    mu_v = math.exp(modelo["base"] + visitante.ataque + local.defensa)
+    return mu_l, mu_v
+
+
+def multiplicador(t_propia, t_rival, minuto):
+    """Cuánto cambian los goles esperados de un equipo según las tácticas."""
+    m = TACTICAS[t_propia]["propio"] * TACTICAS[t_rival]["rival"]
+    if t_propia == "contraataque" and t_rival in TACTICAS_ADELANTADAS:
+        m *= BONUS_CONTRA
+    return m
+
+
+# Peso de cada minuto: los goles son algo más frecuentes al final.
+# Promedio 1, así que en 90 minutos suman los goles esperados.
+_PESOS = [1 + 0.006 * m for m in range(1, 91)]
+PESO = [0.0] + [p * 90 / sum(_PESOS) for p in _PESOS]   # PESO[1..90]
+ACUM = [0.0]
+for _p in PESO[1:]:
+    ACUM.append(ACUM[-1] + _p)
+
+
+def peso_tramo(desde, hasta):
+    """Suma de pesos de los minutos desde..hasta (inclusive) / 90."""
+    if desde > hasta:
+        return 0.0
+    return (ACUM[hasta] - ACUM[desde - 1]) / 90
+
+
+def goles_restantes(base, t_propia, t_rival, minuto):
+    """Goles esperados desde 'minuto' hasta el final."""
+    return base * peso_tramo(minuto, 90) * multiplicador(t_propia, t_rival, minuto)
+
+
+def poisson_pmf(k, mu):
+    return math.exp(-mu) * mu ** k / math.factorial(k)
+
+
+def prob_resultado(gf, gc, mu_f, mu_c, maximo=8):
+    """Probabilidad de ganar, empatar y perder, dado el marcador actual
+    y los goles esperados que faltan."""
+    pf = [poisson_pmf(k, mu_f) for k in range(maximo + 1)]
+    pc = [poisson_pmf(k, mu_c) for k in range(maximo + 1)]
+    gana = empata = 0.0
+    for i, a in enumerate(pf):
+        for j, b in enumerate(pc):
+            diff = gf + i - gc - j
+            if diff > 0:
+                gana += a * b
+            elif diff == 0:
+                empata += a * b
+    return gana, empata, 1 - gana - empata
+
+
+# ---------------------------------------------------------------- DT
+def decidir_calculado(k, eq, rival, base_eq, base_rival, gf, gc, minuto, rng):
+    """El DT prueba cada táctica para lo que queda del partido y se queda
+    con la que más puntos le da en promedio, según su personalidad."""
+    p = PERSONALIDADES[eq.dt]
+    opciones = disponibles(minuto)
+    puntajes = {}
+    for t in set(opciones) | {eq.tactica}:
+        mu_f = goles_restantes(base_eq, t, rival.tactica, minuto)
+        mu_c = goles_restantes(base_rival, rival.tactica, t, minuto)
+        gana, empata, _ = prob_resultado(gf, gc, mu_f, mu_c)
+        puntajes[t] = p["ganar"] * gana + p["empatar"] * empata
+    diferencia = max(puntajes.values()) - min(puntajes.values())
+    if diferencia < p["umbral"]:
+        return None   # ninguna táctica cambia nada: no vale la pena tocar
+    # El error del DT es proporcional a lo que está en juego
+    for t in puntajes:
+        puntajes[t] += rng.gauss(0, p["error"] * diferencia)
+    mejor = max((t for t in puntajes if t in opciones), key=puntajes.get)
+    if mejor != eq.tactica and puntajes[mejor] - puntajes[eq.tactica] > p["umbral"]:
+        return mejor
+    return None
+
+
+# ---------------------------------------------------------------- DT con IA
+# Aprendizaje por refuerzo: para cada situación (momento del partido,
+# diferencia de goles, fuerza relativa, tipo de táctica del rival y
+# cansancio de su equipo) el DT
+# guarda cuántos puntos espera sacar con cada táctica. Juega la mejor.
+ACCIONES = list(TACTICAS)
+TIPO_RIVAL = {"defensiva": 0, "contraataque": 0, "equilibrada": 1,
+              "ofensiva": 2, "presion": 2, "todo_al_ataque": 2}
+CORTES_FUERZA = (-0.8, -0.4, -0.15, 0.15, 0.4, 0.8)
+TABLA_DE = {"equilibrado": "equilibrado", "conservador": "conservador",
+            "arriesgado": "arriesgado", "impulsivo": "equilibrado"}
+CEREBRO = None   # se carga de dt_ia.json
+VERSION_CEREBRO = 2   # cambia cuando cambia lo que el DT tiene en cuenta
+
+
+def estado_dt(minuto, gf, gc, base_eq, base_rival, t_rival, energia):
+    """Resume la situación del partido como la ve el DT."""
+    tramo = sum(1 for t in TRAMOS if t <= minuto) - 1
+    dif = max(-2, min(2, gf - gc))
+    r = math.log(base_eq / base_rival)
+    fuerza = sum(1 for c in CORTES_FUERZA if r > c)
+    cansancio = 0 if energia >= 0.8 else 1 if energia >= 0.65 else 2
+    return f"{tramo}|{dif}|{fuerza}|{TIPO_RIVAL[t_rival]}|{cansancio}"
+
+
+def decidir_ia(k, eq, rival, base_eq, base_rival, gf, gc, minuto, rng):
+    tabla = CEREBRO["tablas"][TABLA_DE[eq.dt]]
+    q = tabla.get(estado_dt(minuto, gf, gc, base_eq, base_rival, rival.tactica,
+                            eq.energia))
+    if q is None:
+        return None   # situación que nunca vio: no toca nada
+    validas = [ACCIONES.index(t) for t in disponibles(minuto)]
+    if eq.dt == "impulsivo" and rng.random() < 0.25:
+        return ACCIONES[rng.choice(validas)]   # decide a ojo
+    mejor = max(validas, key=lambda i: q[i])
+    actual = ACCIONES.index(eq.tactica)
+    if mejor != actual and q[mejor] - q[actual] > 0.02:
+        return ACCIONES[mejor]
+    return None
+
+
+def cargar_cerebro(ruta="dt_ia.json"):
+    global CEREBRO
+    if os.path.exists(ruta):
+        with open(ruta, encoding="utf-8") as f:
+            cerebro = json.load(f)
+        if cerebro.get("version") != VERSION_CEREBRO:
+            print("dt_ia.json es de una versión anterior: reentrená con "
+                  "entrenar_dt.py.\nMientras tanto, los DTs usan el modo calculador.")
+            return
+        CEREBRO = cerebro
+        print(f"DT con IA cargado ({CEREBRO['partidos']:,} partidos de "
+              "entrenamiento).".replace(",", "."))
+    else:
+        print("Sin dt_ia.json: los DTs usan el modo calculador.")
+
+
+def motivo(gf, gc):
+    if gf > gc:
+        return f"gana {gf}-{gc}"
+    if gf < gc:
+        return f"pierde {gf}-{gc}"
+    return f"empata {gf}-{gc}"
+
+
+# ---------------------------------------------------------------- partido
+def minuto_texto(rng, m):
+    if m in (45, 90) and rng.random() < 0.5:
+        return f"{m}+{rng.randint(1, 4)}'"
+    return f"{m}'"
+
+
+def sucede(rng, tasa):
+    """True con la probabilidad de que ocurra al menos un evento en el minuto."""
+    return rng.random() < 1 - math.exp(-tasa)
+
+
+OFENSIVOS = ("DC", "ED", "EI", "MCO")
+DEFENSIVOS = ("DFC", "MCD")
+# Quién suele hacer los goles y quién ve las amarillas
+PESO_GOL = {"DC": 5.0, "ED": 2.6, "EI": 2.6, "MCO": 2.3, "MC": 1.4, "MCD": 0.8,
+            "LD": 0.7, "LI": 0.7, "DFC": 1.1, "ARQ": 0.0}
+PESO_TARJETA = {"DFC": 1.5, "MCD": 1.6, "LD": 1.2, "LI": 1.2, "MC": 1.1, "MCO": 0.8,
+                "ED": 0.8, "EI": 0.8, "DC": 0.9, "ARQ": 0.3}
+
+
+def elegir_alineacion(eq, rival, modelo, es_local, rng):
+    """El DT prueba cada formación con sus mejores 11 contra el rival y se
+    queda con la que más puntos le da, según su personalidad."""
+    if not eq.dt:
+        return eq.formacion, J.armar_xi(eq.plantel, eq.formacion)
+    f_rival = rival.formacion if not rival.dt else J.FORMACION_BASE
+    ra, rd, *_ = J.fuerza(J.armar_xi(rival.plantel, f_rival), f_rival)
+    p = PERSONALIDADES[eq.dt]
+    localia = modelo["localia"]
+    opciones = []
+    for f in J.FORMACIONES:
+        xi = J.armar_xi(eq.plantel, f)
+        a, d, *_ = J.fuerza(xi, f)
+        mu_f = math.exp(modelo["base"] + (localia if es_local else 0) + a + rd) * ESCALA
+        mu_c = math.exp(modelo["base"] + (0 if es_local else localia) + ra + d) * ESCALA
+        gana, empata, _ = prob_resultado(0, 0, mu_f, mu_c)
+        puntos = p["ganar"] * gana + p["empatar"] * empata
+        if f == eq.formacion:
+            puntos += APEGO_FORMACION   # solo la cambia si otra es claramente mejor
+        opciones.append((puntos, f, xi))
+    if eq.dt == "impulsivo" and rng.random() < 0.3:
+        _, f, xi = rng.choice(opciones)
+    else:
+        _, f, xi = max(opciones, key=lambda o: o[0])
+    return f, xi
+
+
+def elegir_cambio(cancha, banco, minuto, gf, gc):
+    """A quién saca y a quién mete el DT. Devuelve (índice, entra, posición)."""
+    campo = [i for i, (_, s) in enumerate(cancha) if s != "ARQ"]
+    n_of = sum(1 for _, s in cancha if s in OFENSIVOS)
+    n_def = sum(1 for _, s in cancha if s in DEFENSIVOS)
+    if gf < gc and minuto >= 60 and n_of < 5:
+        # Perdiendo: saca un volante o un lateral y mete un atacante
+        salen = [i for i in campo if cancha[i][1] in ("MCD", "MC", "LD", "LI")]
+        entran = [j for j in banco if j.pos in OFENSIVOS]
+        if salen and entran:
+            i = min(salen, key=lambda i: cancha[i][0].energia)
+            entra = max(entran, key=lambda j: J.puntaje(j, j.pos))
+            return i, entra, entra.pos
+    if gf > gc and minuto >= 70 and n_def < 5:
+        # Ganando: saca un atacante y mete un defensor o un volante central
+        salen = [i for i in campo if cancha[i][1] in OFENSIVOS]
+        entran = [j for j in banco if j.pos in DEFENSIVOS]
+        if salen and entran:
+            i = min(salen, key=lambda i: cancha[i][0].energia)
+            entra = max(entran, key=lambda j: J.puntaje(j, j.pos))
+            return i, entra, entra.pos
+    # Cambio normal: el más cansado por el mejor suplente para ese puesto
+    i = min(campo, key=lambda i: cancha[i][0].energia)
+    slot = cancha[i][1]
+    entra = max(banco, key=lambda j: J.puntaje(j, slot))
+    return i, entra, slot
+
+
+def elegir_jugador(cancha, pesos, rng, excluir=()):
+    candidatos = [(j, s) for j, s in cancha if id(j) not in excluir]
+    if not candidatos:
+        return None
+    w = [pesos[s] * (j.ataque / 65) ** 2 if pesos is PESO_GOL else pesos[s]
+         for j, s in candidatos]
+    if sum(w) <= 0:
+        return None
+    return rng.choices([j for j, _ in candidatos], weights=w)[0]
+
+
+def mostrar_alineacion(e, formacion, xi, tactica):
+    print(f"{e.nombre} · {formacion} · DT {e.dt or 'sin DT'}")
+    restantes = list(xi)
+
+    def sacar(slot):
+        for t in restantes:
+            if t[1] == slot:
+                restantes.remove(t)
+                return t[0].apellido
+        return "?"
+
+    lineas = J.FORMACIONES[formacion]
+    print(f" Arq: {sacar('ARQ')}")
+    for idx, linea in enumerate(lineas):
+        etiqueta = "Def" if idx == 0 else "Del" if idx == len(lineas) - 1 else "Med"
+        texto = f" {etiqueta}: " + ", ".join(sacar(s) for s in linea)
+        print(textwrap.fill(texto, ANCHO, subsequent_indent="      "))
+    print(f" Táctica: {tactica}")
+
+
+def simular_partido(local, visitante, modelo, mostrar=True, semilla=None,
+                    decisor=None):
+    """decisor: función que decide la táctica de un DT. Por defecto usa la
+    IA entrenada si está cargada, o el DT calculador.
+    Devuelve (goles local, goles visitante, estadísticas)."""
+    if decisor is None:
+        decisor = decidir_ia if CEREBRO else decidir_calculado
+    rng = random.Random(semilla)
+    eq = {"L": local, "V": visitante}
+    otro = {"L": "V", "V": "L"}
+    for k in "LV":
+        asegurar_plantel(eq[k])
+
+    # Formación y titulares
+    formacion, cancha, banco, jugaron = {}, {}, {}, {}
+    for k in "LV":
+        f, xi = elegir_alineacion(eq[k], eq[otro[k]], modelo, k == "L", rng)
+        formacion[k], cancha[k] = f, xi
+        en_cancha = {id(j) for j, _ in xi}
+        banco[k] = [j for j in eq[k].plantel if id(j) not in en_cancha]
+        jugaron[k] = [j for j, _ in xi]
+        for j in eq[k].plantel:
+            j.energia = j.fisico
+    titulares = {k: [list(x) for x in cancha[k]] for k in "LV"}
+
+    goles = {"L": 0, "V": 0}
+    stats = {k: Counter() for k in "LV"}
+    autores = []           # (lado, jugador, minuto)
+    amonestados = set()
+    ultimo_cambio = {"L": -99, "V": -99}
+    cambios_rest = {"L": CAMBIOS_PERMITIDOS, "V": CAMBIOS_PERMITIDOS}
+    ventanas = {"L": VENTANAS, "V": VENTANAS}
+    ultimo_gol = -99
+    eventos = []
+    posesion_total = 0.0
+
+    def log(texto):
+        if mostrar:
+            eventos.append(texto)
+
+    def energia_equipo(k):
+        campo = [j.energia for j, s in cancha[k] if s != "ARQ"]
+        return sum(campo) / len(campo)
+
+    def calcular_bases():
+        fz = {k: J.fuerza(cancha[k], formacion[k]) for k in "LV"}
+        mu_l = math.exp(modelo["base"] + modelo["localia"] + fz["L"][0] + fz["V"][1])
+        mu_v = math.exp(modelo["base"] + fz["V"][0] + fz["L"][1])
+        return {"L": mu_l, "V": mu_v}
+
+    def creacion(k):
+        campo = [j.creacion * j.energia for j, s in cancha[k] if s != "ARQ"]
+        return sum(campo) / len(campo)
+
+    base = calcular_bases()
+
+    # Táctica inicial: la elige el DT o queda la fija
+    for k in "LV":
+        eq[k].tactica = eq[k].tactica_inicial
+        eq[k].energia = energia_equipo(k)
+    for k in "LV":
+        if eq[k].dt:
+            nueva = decisor(k, eq[k], eq[otro[k]], base[k], base[otro[k]], 0, 0, 1, rng)
+            if nueva:
+                eq[k].tactica = nueva
+    tacticas_iniciales = {k: eq[k].tactica for k in "LV"}
+
+    for minuto in range(1, 91):
+        mt = minuto_texto(rng, minuto)
+        if minuto == 46:
+            for k in "LV":
+                for j, _ in cancha[k]:
+                    j.energia = min(1.0, j.energia + RECUPERO_ENTRETIEMPO)
+
+        # Cambios de jugadores
+        if minuto in MOMENTOS_DECISION:
+            hubo = False
+            for k in "LV":
+                e = eq[k]
+                e.energia = energia_equipo(k)
+                n = decidir_cambios(e.dt, minuto, e.energia, cambios_rest[k],
+                                    ventanas[k], goles[k], goles[otro[k]], rng)
+                n = min(n, len(banco[k]))
+                if not n:
+                    continue
+                for _ in range(n):
+                    i, entra, slot = elegir_cambio(cancha[k], banco[k], minuto,
+                                                   goles[k], goles[otro[k]])
+                    sale = cancha[k][i][0]
+                    cancha[k][i] = [entra, slot]
+                    banco[k].remove(entra)
+                    jugaron[k].append(entra)
+                    log(f"🔄 {minuto}' {e.nombre}: sale {sale.corto} "
+                        f"({sale.energia:.0%}), entra {entra.corto} ({slot})")
+                cambios_rest[k] -= n
+                if minuto != 46:
+                    ventanas[k] -= 1
+                stats[k]["sustituciones"] += n
+                hubo = True
+            if hubo:
+                base = calcular_bases()
+        for k in "LV":
+            eq[k].energia = energia_equipo(k)
+
+        # Decisiones tácticas de los DT
+        if minuto in MOMENTOS_DECISION or minuto == ultimo_gol + 2:
+            for k in "LV":
+                e = eq[k]
+                if (not e.dt or stats[k]["cambios"] >= MAX_CAMBIOS_TACTICOS
+                        or minuto - ultimo_cambio[k] < MIN_ENTRE_CAMBIOS):
+                    continue
+                nueva = decisor(k, e, eq[otro[k]], base[k], base[otro[k]],
+                                goles[k], goles[otro[k]], minuto, rng)
+                if nueva:
+                    e.tactica = nueva
+                    ultimo_cambio[k] = minuto
+                    stats[k]["cambios"] += 1
+                    log(f"🧠 {minuto}' DT de {e.nombre}: {nueva} "
+                        f"({motivo(goles[k], goles[otro[k]])})")
+
+        # Lo que pasa en el minuto
+        empate = goles["L"] == goles["V"]
+        for k in "LV":
+            e, r = eq[k], eq[otro[k]]
+            tasa = (base[k] * ESCALA * PESO[minuto] / 90
+                    * multiplicador(e.tactica, r.tactica, minuto)
+                    * efecto_energia(e.energia, r.energia))
+            if empate:
+                tasa *= FACTOR_EMPATE
+            if sucede(rng, tasa):
+                goles[k] += 1
+                ultimo_gol = minuto
+                autor = elegir_jugador(cancha[k], PESO_GOL, rng)
+                autores.append((k, autor, minuto))
+                log(f"⚽ {mt} GOL de {e.nombre}: {autor.corto}  "
+                    f"({goles['L']}-{goles['V']})")
+            elif sucede(rng, 2.4 * tasa):
+                stats[k]["atajados"] += 1
+                arq = next((j for j, s in cancha[otro[k]] if s == "ARQ"), None)
+                log(f"🧤 {mt} Ataja {arq.corto} ({r.nombre})")
+            elif sucede(rng, 5.5 * tasa + 1.5 / 90):
+                stats[k]["desviados"] += 1
+                if rng.random() < 0.3:
+                    tirador = elegir_jugador(cancha[k], PESO_GOL, rng)
+                    log(f"↗ {mt} Desviado: {tirador.corto} ({e.nombre})")
+            if sucede(rng, 2.2 / 90):
+                j = elegir_jugador(cancha[k], PESO_TARJETA, rng, amonestados)
+                if j:
+                    amonestados.add(id(j))
+                    stats[k]["amarillas"] += 1
+                    log(f"🟨 {mt} Amarilla: {j.corto} ({e.nombre})")
+
+        # Desgaste: depende de la táctica y de la resistencia de cada uno
+        for k in "LV":
+            d = DESGASTE[eq[k].tactica]
+            for j, s in cancha[k]:
+                factor = 0.4 if s == "ARQ" else 1 + (65 - j.resistencia) * 0.012
+                j.energia = max(ENERGIA_MINIMA, j.energia - d * factor)
+
+        posesion_total += (50 + (creacion("L") - creacion("V")) * 0.6
+                           + TACTICAS[local.tactica]["posesion"]
+                           - TACTICAS[visitante.tactica]["posesion"])
+        if minuto == 45:
+            log(f"--- ENTRETIEMPO {goles['L']}-{goles['V']} ---")
+
+    # Cómo quedan físicamente los que jugaron
+    for k in "LV":
+        for j in jugaron[k]:
+            j.fisico = j.energia
+        eq[k].energia = energia_equipo(k)
+    stats["goles"] = autores
+    stats["formacion"] = formacion
+
+    gl, gv = goles["L"], goles["V"]
+    if not mostrar:
+        return gl, gv, stats
+
+    posesion = max(25, min(75, posesion_total / 90 + rng.gauss(0, 3)))
+    print("\n" + "=" * ANCHO)
+    print(f" {local.nombre} vs {visitante.nombre}")
+    print("=" * ANCHO)
+    for k in "LV":
+        mostrar_alineacion(eq[k], formacion[k], titulares[k], tacticas_iniciales[k])
+        print()
+    print("-" * ANCHO)
+    for texto in eventos:
+        print(textwrap.fill(texto, ANCHO, subsequent_indent="     "))
+
+    L, V = stats["L"], stats["V"]
+    print("\n" + "-" * ANCHO)
+    print(f" FINAL: {local.nombre} {gl} - {gv} {visitante.nombre}")
+    print("-" * ANCHO)
+    for k in "LV":
+        suyos = [(j, m) for lado, j, m in autores if lado == k]
+        if suyos:
+            por_jugador = {}
+            for j, m in suyos:
+                por_jugador.setdefault(j.corto, []).append(f"{m}'")
+            texto = f" {eq[k].nombre}: " + ", ".join(
+                f"{n} {' '.join(ms)}" for n, ms in por_jugador.items())
+            print(textwrap.fill(texto, ANCHO, subsequent_indent="   "))
+    filas = (("Posesión", f"{posesion:.0f}%", f"{100 - posesion:.0f}%"),
+             ("Tiros", gl + L["atajados"] + L["desviados"],
+              gv + V["atajados"] + V["desviados"]),
+             ("Al arco", gl + L["atajados"], gv + V["atajados"]),
+             ("Atajadas", V["atajados"], L["atajados"]),
+             ("Amarillas", L["amarillas"], V["amarillas"]),
+             ("Cambios", L["sustituciones"], V["sustituciones"]),
+             ("Tácticas DT", L["cambios"], V["cambios"]),
+             ("Energía", f"{local.energia:.0%}", f"{visitante.energia:.0%}"))
+    print()
+    for nombre, a, b in filas:
+        print(f"{nombre:<12}{str(a):>6}  -  {str(b):<6}")
+    if gl > gv:
+        print(f"\nGanador: {local.nombre}")
+    elif gv > gl:
+        print(f"\nGanador: {visitante.nombre}")
+    else:
+        print("\nEmpate.")
+    return gl, gv, stats
+
+
+def prueba_masiva(local, visitante, modelo, cantidad=1000):
+    conteo, marcadores, cambios, total = Counter(), Counter(), Counter(), 0
+    formaciones, goleadores = Counter(), Counter()
+    for i in range(cantidad):
+        reponer_fisico(local, visitante)
+        gl, gv, stats = simular_partido(local, visitante, modelo,
+                                        mostrar=False, semilla=i)
+        total += gl + gv
+        marcadores[(gl, gv)] += 1
+        cambios["L"] += stats["L"]["cambios"]
+        cambios["V"] += stats["V"]["cambios"]
+        formaciones[(local.nombre, stats["formacion"]["L"])] += 1
+        formaciones[(visitante.nombre, stats["formacion"]["V"])] += 1
+        for lado, j, _ in stats["goles"]:
+            goleadores[(j.corto, (local if lado == "L" else visitante).nombre)] += 1
+        conteo["L" if gl > gv else "V" if gv > gl else "E"] += 1
+    print(f"\n--- {cantidad} PARTIDOS ---")
+    print(f"{local.nombre}: {conteo['L'] / cantidad:.1%}")
+    print(f"Empate: {conteo['E'] / cantidad:.1%}")
+    print(f"{visitante.nombre}: {conteo['V'] / cantidad:.1%}")
+    print(f"Goles por partido: {total / cantidad:.2f}")
+    print(f"Cambios tácticos por partido: {cambios['L'] / cantidad:.1f} - "
+          f"{cambios['V'] / cantidad:.1f}")
+    print("Resultados más comunes:")
+    for (gl, gv), n in marcadores.most_common(5):
+        print(f"  {gl}-{gv}: {n / cantidad:.1%}")
+    print("Formación más usada:")
+    for e in (local, visitante):
+        f, n = max(((f, n) for (eq, f), n in formaciones.items() if eq == e.nombre),
+                   key=lambda x: x[1])
+        print(f"  {e.nombre}: {f} ({n / cantidad:.0%})")
+    print("Goleadores (goles cada 10 partidos):")
+    for (j, club), n in goleadores.most_common(5):
+        print(f"  {j} ({club[:12]}): {10 * n / cantidad:.1f}")
+
+
+# ---------------------------------------------------------------- menú
+def cargar_modelo(ruta):
+    if os.path.exists(ruta):
+        with open(ruta, encoding="utf-8") as f:
+            modelo = json.load(f)
+        print(f"Modelo cargado: {len(modelo['equipos'])} equipos.")
+        return modelo
+    print(f"No encontré {ruta}: solo equipos inventados.")
+    return MODELO_VACIO
+
+
+# ---------------------------------------------------------------- cuadrangular
+# Todos contra todos, ida y vuelta: 6 fechas, 2 partidos por fecha.
+# Cada par de números es (local, visitante) según el orden de los equipos.
+FIXTURE_IDA = [((0, 1), (2, 3)), ((0, 2), (3, 1)), ((3, 0), (1, 2))]
+FIXTURE = FIXTURE_IDA + [tuple((v, l) for l, v in fecha) for fecha in FIXTURE_IDA]
+
+
+def ordenar_tabla(tabla):
+    """Puntos, diferencia de gol, goles a favor."""
+    return sorted(tabla.items(), key=lambda kv: (kv[1]["Pts"], kv[1]["GF"] - kv[1]["GC"],
+                                                kv[1]["GF"]), reverse=True)
+
+
+def mostrar_tabla(tabla):
+    print(f"\n{'':<3}{'Equipo':<14}{'PJ':>3}{'G':>3}{'E':>3}{'P':>3}{'DG':>4}{'Pts':>5}")
+    for i, (nombre, f) in enumerate(ordenar_tabla(tabla), 1):
+        dg = f["GF"] - f["GC"]
+        print(f"{i:<3}{nombre[:13]:<14}{f['PJ']:>3}{f['G']:>3}{f['E']:>3}{f['P']:>3}"
+              f"{dg:>+4}{f['Pts']:>5}")
+
+
+RECUPERO_FECHA = 0.25   # físico que se recupera entre una fecha y la otra
+
+
+def mostrar_goleadores(goleadores, cantidad=5):
+    if not goleadores:
+        return
+    print("\nGoleadores:")
+    for (j, club), n in goleadores.most_common(cantidad):
+        print(f"  {n}  {j} ({club})")
+
+
+def cuadrangular(modelo):
+    print("\n=== CUADRANGULAR (ida y vuelta) ===")
+    equipos = []
+    for i in range(1, 5):
+        equipos.append(elegir_equipo(i, modelo, ya_elegidos=equipos,
+                                     etiqueta="cuadrangular"))
+    tabla = {e.nombre: Counter(PJ=0) for e in equipos}
+    goleadores = Counter()
+    reponer_fisico(*equipos)
+
+    for numero, fecha in enumerate(FIXTURE, 1):
+        print("\n" + "#" * ANCHO)
+        print(f" FECHA {numero} de {len(FIXTURE)}"
+              + ("  (vuelta)" if numero > len(FIXTURE_IDA) else ""))
+        for l, v in fecha:
+            print(f"  {equipos[l].nombre} vs {equipos[v].nombre}")
+        print("#" * ANCHO)
+        resultados = []
+        for l, v in fecha:
+            input("\nEnter para jugar el partido...")
+            local, visitante = equipos[l], equipos[v]
+            gl, gv, stats = simular_partido(local, visitante, modelo)
+            resultados.append(f"{local.nombre} {gl} - {gv} {visitante.nombre}")
+            for lado, j, _ in stats["goles"]:
+                goleadores[(j.corto, (local if lado == "L" else visitante).nombre)] += 1
+            anotar(tabla, local, visitante, gl, gv)
+        input("\nEnter para ver la tabla...")
+        print(f"\nResultados de la fecha {numero}:")
+        for r in resultados:
+            print("  " + r)
+        mostrar_tabla(tabla)
+        mostrar_goleadores(goleadores)
+        # Descanso entre fechas: los que jugaron recuperan parte del físico
+        for e in equipos:
+            for j in e.plantel:
+                j.fisico = min(1.0, j.fisico + RECUPERO_FECHA)
+
+    campeon, f = ordenar_tabla(tabla)[0]
+    print("\n" + "*" * ANCHO)
+    print(f" 🏆 CAMPEÓN: {campeon}")
+    print(f" {f['Pts']} puntos, {f['G']} ganados, {f['E']} empatados, {f['P']} perdidos")
+    if goleadores:
+        (j, club), n = goleadores.most_common(1)[0]
+        print(f" ⚽ Goleador: {j} ({club}), {n} goles")
+    print("*" * ANCHO)
+
+
+# ---------------------------------------------------------------- torneo largo
+# Todos contra todos, ida y vuelta, con todos los clubes del modelo.
+PERSONALIDAD_AL_AZAR = {"equilibrado": 40, "conservador": 25, "arriesgado": 25,
+                        "impulsivo": 10}
+
+
+def armar_fixture(cantidad, rng):
+    """Fixture de todos contra todos (método del círculo), ida y vuelta.
+    Devuelve una lista de fechas; cada fecha es una lista de (local, visitante)."""
+    orden = list(range(cantidad))
+    rng.shuffle(orden)
+    if len(orden) % 2:
+        orden.append(None)          # con cantidad impar, uno queda libre
+    n = len(orden)
+    ida = []
+    for ronda in range(n - 1):
+        fecha = []
+        for i in range(n // 2):
+            a, b = orden[i], orden[n - 1 - i]
+            if a is None or b is None:
+                continue
+            # se alterna la localía para que cada uno juegue la mitad de local
+            if (i == 0 and ronda % 2) or (i > 0 and i % 2):
+                a, b = b, a
+            fecha.append((a, b))
+        ida.append(fecha)
+        orden = [orden[0], orden[-1]] + orden[1:-1]
+    vuelta = [[(b, a) for a, b in fecha] for fecha in ida]
+    return ida + vuelta
+
+
+def anotar(tabla, local, visitante, gl, gv):
+    for eq, gf, gc in ((local, gl, gv), (visitante, gv, gl)):
+        f = tabla[eq.nombre]
+        f["PJ"] += 1
+        f["GF"] += gf
+        f["GC"] += gc
+        if gf > gc:
+            f["G"] += 1
+            f["Pts"] += 3
+        elif gf == gc:
+            f["E"] += 1
+            f["Pts"] += 1
+        else:
+            f["P"] += 1
+
+
+def posicion(tabla, nombre):
+    for i, (n, f) in enumerate(ordenar_tabla(tabla), 1):
+        if n == nombre:
+            return i, f
+
+
+def torneo_largo(modelo):
+    clubes = sorted(PLANTELES)
+    if len(clubes) < 4:
+        print("Hacen falta al menos 4 clubes reales en el modelo.")
+        return
+    print(f"\n=== TORNEO LARGO: {len(clubes)} equipos, ida y vuelta ===")
+    print("¿Querés seguir a un club? Sus partidos se ven con relato")
+    print("y elegís su DT. Enter para no seguir a ninguno.")
+    nombres_lista = sorted(modelo["equipos"])
+    mio = None
+    while True:
+        raw = input("Club: ").strip()
+        if not raw:
+            break
+        if raw.isdigit() and 1 <= int(raw) <= len(nombres_lista):
+            candidatos = [nombres_lista[int(raw) - 1]]
+        else:
+            candidatos = [n for n in nombres_lista if raw.lower() in n.lower()]
+        if len(candidatos) == 1:
+            mio = candidatos[0]
+            print(f"-> {mio}")
+            break
+        print("Hay varios: " + ", ".join(candidatos[:8]) if candidatos
+              else "No lo encontré. Probá de nuevo (o Enter para ninguno).")
+
+    equipos = []
+    for c in clubes:
+        d = modelo["equipos"][c]
+        e = Equipo(c, d["ataque"], d["defensa"])
+        e.plantel = J.copiar_plantel(PLANTELES[c])
+        if c == mio:
+            configurar_dt(e)
+        else:
+            rng_dt = random.Random(f"dt|{c}")
+            e.dt = rng_dt.choices(list(PERSONALIDAD_AL_AZAR),
+                                  weights=list(PERSONALIDAD_AL_AZAR.values()))[0]
+            e.formacion = formacion_preferida(c, e.dt)
+        equipos.append(e)
+    reponer_fisico(*equipos)
+    semilla = random.randrange(10 ** 9)
+    fixture = armar_fixture(len(equipos), random.Random(semilla))
+    tabla = {e.nombre: Counter(PJ=0) for e in equipos}
+    goleadores = Counter()
+    numero = 0
+
+    def jugar_fecha(con_relato):
+        nonlocal numero
+        fecha = fixture[numero]
+        numero += 1
+        resultados = []
+        for l, v in fecha:
+            local, visitante = equipos[l], equipos[v]
+            es_mio = mio in (local.nombre, visitante.nombre)
+            if es_mio and con_relato:
+                print("\n" + "#" * ANCHO)
+                print(f" FECHA {numero} de {len(fixture)}")
+                print("#" * ANCHO)
+                input("Enter para jugar tu partido...")
+            gl, gv, stats = simular_partido(local, visitante, modelo,
+                                            mostrar=es_mio and con_relato,
+                                            semilla=f"{semilla}|{numero}|{l}|{v}")
+            anotar(tabla, local, visitante, gl, gv)
+            for lado, j, _ in stats["goles"]:
+                goleadores[(j.corto, (local if lado == "L" else visitante).nombre)] += 1
+            resultados.append((es_mio, f"{local.nombre[:15]} {gl}-{gv} {visitante.nombre[:15]}"))
+        for e in equipos:
+            for j in e.plantel:
+                j.fisico = min(1.0, j.fisico + RECUPERO_FECHA)
+        return resultados
+
+    def resumen_mio():
+        if mio:
+            pos, f = posicion(tabla, mio)
+            print(f"\n{mio}: {pos}° con {f['Pts']} puntos "
+                  f"({f['G']}G {f['E']}E {f['P']}P)")
+
+    while numero < len(fixture):
+        print(f"\n--- Fecha {numero + 1} de {len(fixture)} ---")
+        print("1) Jugar fecha  2) Jugar 5 fechas")
+        print("3) Jugar hasta el final  4) Ver tabla")
+        print("5) Goleadores  6) Abandonar torneo")
+        opcion = input("> ").strip()
+        if opcion == "1":
+            resultados = jugar_fecha(con_relato=True)
+            input("\nEnter para ver los resultados de la fecha...")
+            print(f"\nResultados de la fecha {numero}:")
+            for es_mio, r in resultados:
+                print(("► " if es_mio else "  ") + r)
+            resumen_mio()
+        elif opcion in ("2", "3"):
+            hasta = len(fixture) if opcion == "3" else min(len(fixture), numero + 5)
+            while numero < hasta:
+                resultados = jugar_fecha(con_relato=False)
+                propio = [r for es_mio, r in resultados if es_mio]
+                print(f"Fecha {numero}: " + (propio[0] if propio else "jugada"))
+            resumen_mio()
+        elif opcion == "4":
+            mostrar_tabla(tabla)
+        elif opcion == "5":
+            mostrar_goleadores(goleadores, 10)
+        elif opcion == "6":
+            return
+        else:
+            print("Elegí del 1 al 6.")
+
+    mostrar_tabla(tabla)
+    mostrar_goleadores(goleadores, 10)
+    campeon, f = ordenar_tabla(tabla)[0]
+    print("\n" + "*" * ANCHO)
+    print(f" 🏆 CAMPEÓN: {campeon}")
+    print(f" {f['Pts']} puntos, {f['G']} ganados, {f['E']} empatados, {f['P']} perdidos")
+    (j, club), n = goleadores.most_common(1)[0]
+    print(f" ⚽ Goleador: {j} ({club}), {n} goles")
+    print("*" * ANCHO)
+    resumen_mio()
+
+
+# ---------------------------------------------------------------- menú
+def partido_amistoso(modelo):
+    local = elegir_equipo(1, modelo)
+    visitante = elegir_equipo(2, modelo, ya_elegidos=[local])
+    reponer_fisico(local, visitante)
+    simular_partido(local, visitante, modelo)
+    while True:
+        print("\n1) Otro partido  2) 1000 partidos")
+        print("3) Cambiar DTs  4) Cambiar equipos")
+        print("5) Volver al menú")
+        opcion = input("> ").strip()
+        if opcion == "1":
+            reponer_fisico(local, visitante)
+            simular_partido(local, visitante, modelo)
+        elif opcion == "2":
+            prueba_masiva(local, visitante, modelo)
+        elif opcion == "3":
+            print()
+            configurar_dt(local)
+            print()
+            configurar_dt(visitante)
+        elif opcion == "4":
+            local = elegir_equipo(1, modelo)
+            visitante = elegir_equipo(2, modelo, ya_elegidos=[local])
+        elif opcion == "5":
+            break
+        else:
+            print("Elegí del 1 al 5.")
+
+
+def ver_plantel(modelo):
+    print("\n--- Ver plantel ---")
+    club = buscar_club(modelo, permitir_inventado=False)
+    if club:
+        J.mostrar_plantel(club, PLANTELES[club])
+
+
+def main():
+    global PLANTELES
+    print("SIMULADOR DE FÚTBOL — 0.8")
+    ruta = sys.argv[1] if len(sys.argv) > 1 else "modelo_poisson.json"
+    modelo = cargar_modelo(ruta)
+    PLANTELES = J.cargar_planteles(modelo)
+    cargar_cerebro()
+    while True:
+        print("\n=== MENÚ ===")
+        print("1) Partido  2) Cuadrangular")
+        print("3) Torneo largo  4) Ver plantel")
+        print("5) Salir")
+        opcion = input("> ").strip()
+        if opcion == "1":
+            partido_amistoso(modelo)
+        elif opcion == "2":
+            cuadrangular(modelo)
+        elif opcion == "3":
+            torneo_largo(modelo)
+        elif opcion == "4":
+            if PLANTELES:
+                ver_plantel(modelo)
+            else:
+                print("No hay clubes reales cargados.")
+        elif opcion == "5":
+            print("¡Hasta la próxima!")
+            break
+        else:
+            print("Elegí del 1 al 5.")
+
+
+if __name__ == "__main__":
+    main()
