@@ -10,6 +10,10 @@ temporada hay premios según el puesto.
 El mercado abre dos veces por temporada: en la pretemporada y a mitad del
 torneo. Los clubes que maneja la computadora compran lo que más les falta,
 venden si les pagan bien y fichan libres para completar el plantel.
+
+Cada jugador tiene un contrato de 1 a 4 temporadas con un sueldo pactado.
+Al terminar, renueva o se va libre. Con un año de contrato vale menos,
+porque el club sabe que lo puede perder gratis.
 """
 import math
 
@@ -23,7 +27,8 @@ PARTE_SUELDOS = 0.8          # al arrancar, los sueldos son el 80% del ingreso
 CAJA_INICIAL = 0.35          # caja inicial, en proporción al ingreso anual
 PREMIO_CAMPEON = 0.30        # premio al campeón, en proporción a su ingreso
 CAJA_MAXIMA = 2.0            # tope de caja de los clubes de la computadora (años de ingreso)
-INDEMNIZACION = 0.5          # liberar a un jugador cuesta medio año de sueldo
+INDEMNIZACION = 0.5          # liberar a un jugador cuesta la mitad de lo que le queda
+DESCUENTO_ULTIMO_ANIO = 0.7  # con un año de contrato vale menos
 LIBRES_POR_POSICION = 3
 # Por los jugadores caros de tu club también llegan ofertas de afuera
 EXTERIOR = ("un club de Brasil", "un club de México", "un club de la MLS",
@@ -50,9 +55,43 @@ def valor(j):
     return round(base * edad * potencial, 3)
 
 
-def sueldo(j):
-    """Sueldo anual en millones de dólares."""
+def sueldo_pedido(j):
+    """Lo que pide de sueldo anual hoy, según su valor (millones de dólares)."""
     return max(SUELDO_MINIMO, SUELDO_SOBRE_VALOR * valor(j))
+
+
+def sueldo(j):
+    """Lo que cobra: el sueldo pactado en su contrato."""
+    return j.sueldo or sueldo_pedido(j)
+
+
+def anios_contrato(j):
+    """Cuántos años firma: los jóvenes más, los veteranos menos."""
+    return 4 if j.edad <= 25 else 3 if j.edad <= 29 else 2 if j.edad <= 32 else 1
+
+
+def firmar(j, sueldo_anual=None, anios=None):
+    j.sueldo = round(sueldo_anual if sueldo_anual is not None else sueldo_pedido(j), 3)
+    j.contrato = anios or anios_contrato(j)
+
+
+def iniciar_contratos(planteles, rng):
+    """Contratos para los que todavía no tienen (al arrancar una partida)."""
+    for plantel in planteles:
+        for j in plantel:
+            if not j.sueldo:
+                firmar(j, sueldo_pedido(j) * rng.uniform(0.85, 1.15), rng.randint(1, 4))
+
+
+def pretension(j, rng):
+    """Lo que pide para renovar: más si está en su mejor momento."""
+    extra = 1.25 if j.edad <= 29 and j.potencial > J.nivel(j) else 1.1
+    return round(sueldo_pedido(j) * rng.uniform(1.0, extra), 3)
+
+
+def acepta(oferta, pedido):
+    """El jugador acepta si le ofrecen al menos el 90% de lo que pide."""
+    return oferta >= 0.9 * pedido
 
 
 def masa_salarial(plantel):
@@ -109,12 +148,15 @@ def puede_vender(e, j):
 
 
 def precio_pedido(e, j, tits=None):
-    """Lo que pide un club por un jugador: más si es titular, menos si
-    está sin plata."""
+    """Lo que pide un club por un jugador: el doble si es una de sus tres
+    figuras, más si es titular, menos si está sin plata o le queda un año."""
     tits = titulares(e) if tits is None else tits
-    factor = 1.4 if id(j) in tits else 1.1
+    figuras = sorted(e.plantel, key=J.nivel)[-3:]
+    factor = 2.0 if j in figuras else 1.4 if id(j) in tits else 1.1
     if e.caja < 0:
         factor -= 0.2
+    if j.contrato <= 1:
+        factor *= DESCUENTO_ULTIMO_ANIO
     return round(valor(j) * factor, 3)
 
 
@@ -129,11 +171,14 @@ def respuesta(e, j, oferta):
     return "rechaza", pedido
 
 
-def transferir(j, vendedor, comprador, monto):
+def transferir(j, vendedor, comprador, monto, sueldo_anual=None, anios=None):
+    """Pase con contrato nuevo. Sin sueldo pactado, cobra un 10% más de lo
+    que pide (para cambiar de club siempre se mejora)."""
     vendedor.plantel.remove(j)
     comprador.plantel.append(j)
     vendedor.caja += monto
     comprador.caja -= monto
+    firmar(j, sueldo_anual if sueldo_anual is not None else 1.1 * sueldo_pedido(j), anios)
     j.fisico = min(j.fisico, 0.9)    # llega sin haber hecho la pretemporada con el grupo
 
 
@@ -146,21 +191,49 @@ def vender(j, vendedor, club, equipos, monto):
     if es_exterior(club):
         vendedor.plantel.remove(j)
         vendedor.caja += monto
+        j.contrato, j.sueldo = 0, 0.0
     else:
         transferir(j, vendedor, next(e for e in equipos if e.nombre == club), monto)
 
 
-def liberar(j, e, libres):
-    """Rescinde el contrato: el jugador queda libre y el club paga la
-    indemnización."""
+def indemnizacion(j):
+    return INDEMNIZACION * sueldo(j) * max(j.contrato, 1)
+
+
+def liberar(j, e, libres, pagar=True):
+    """Rescinde el contrato: el jugador queda libre y el club paga la mitad
+    de lo que le quedaba por cobrar."""
     e.plantel.remove(j)
-    e.caja -= INDEMNIZACION * sueldo(j)
+    if pagar:
+        e.caja -= indemnizacion(j)
+    j.contrato, j.sueldo = 0, 0.0
     libres.append(j)
 
 
-def fichar_libre(j, e, libres):
+def fichar_libre(j, e, libres, sueldo_anual=None, anios=None):
     libres.remove(j)
     e.plantel.append(j)
+    firmar(j, sueldo_anual, anios)
+
+
+def vencimientos_ia(equipos, mio, libres, rng):
+    """Fin de temporada en los clubes de la computadora: a los que se les
+    terminó el contrato los renuevan si les sirven, si no quedan libres."""
+    log = []
+    for e in equipos:
+        if e.nombre == mio:
+            continue
+        orden = sorted(e.plantel, key=J.nivel, reverse=True)
+        importantes = {id(j) for j in orden[:16]}
+        for j in [j for j in e.plantel if j.contrato <= 0]:
+            sigue = (id(j) in importantes and j.edad < 34) or len(e.plantel) <= PLANTEL_MIN
+            if sigue:
+                firmar(j, pretension(j, rng))
+            else:
+                liberar(j, e, libres, pagar=False)
+                log.append(f"{j.corto} ({j.pos}, {J.nivel(j)}): termina contrato en "
+                           f"{e.nombre}, queda libre")
+    return log
 
 
 # ---------------------------------------------------------------- libres
@@ -171,7 +244,7 @@ def generar_libres(equipos, rng, usados, nivel_medio):
     for pos in J.COMPOSICION:
         for _ in range(LIBRES_POR_POSICION):
             edad = rng.randint(22, 35)
-            meta = nivel_medio - rng.uniform(6, 18)
+            meta = nivel_medio - rng.uniform(10, 22)
             j = J.generar_jugador(pos, edad, meta, meta, 0, rng, usados, set())
             J._redondear(j)
             j.potencial = J._potencial(j, rng)
@@ -185,7 +258,23 @@ def nivel_medio(equipos):
 
 
 # ---------------------------------------------------------------- la computadora
-def movimientos_ia(equipos, mio, libres, rng, prob=0.5):
+def importar(c, pos, actual, rng, usados):
+    """Un club con la caja llena trae un refuerzo del exterior."""
+    meta = actual + rng.uniform(4, 8)
+    j = J.generar_jugador(pos, rng.randint(24, 30), meta, meta, 0, rng, usados,
+                          {x.apellido for x in c.plantel})
+    J._redondear(j)
+    j.potencial = J._potencial(j, rng)
+    precio = round(valor(j) * 1.3, 3)
+    if J.nivel(j) < actual + 3 or precio > 0.6 * c.caja:
+        return None
+    c.plantel.append(j)
+    c.caja -= precio
+    firmar(j, 1.1 * sueldo_pedido(j))
+    return j, precio
+
+
+def movimientos_ia(equipos, mio, libres, rng, prob=0.5, usados=None):
     """Lo que hacen en una ventana los clubes que maneja la computadora.
     Devuelve los movimientos en texto. No le compran al club del jugador:
     a ese le hacen ofertas (ver ofertas_por_mios)."""
@@ -211,7 +300,7 @@ def movimientos_ia(equipos, mio, libres, rng, prob=0.5):
                         and id(j) not in movidos and puede_vender(v, j)):
                     precio = precio_pedido(v, j, tits[v.nombre])
                     # el sueldo nuevo tiene que entrar en lo que gana el club
-                    if (precio <= presupuesto and masa_salarial(c.plantel) + sueldo(j)
+                    if (precio <= presupuesto and masa_salarial(c.plantel) + sueldo_pedido(j)
                             <= (1.3 if rico else 1.05) * c.ingreso):
                         opciones.append((J.nivel(j) - 2 * precio / max(c.ingreso, 0.1),
                                          j, v, precio))
@@ -221,8 +310,14 @@ def movimientos_ia(equipos, mio, libres, rng, prob=0.5):
             movidos.add(id(j))
             log.append(f"{j.corto} ({j.pos}, {J.nivel(j)}): {v.nombre} → "
                        f"{c.nombre}, {plata(precio)}")
+        elif rico and usados is not None and (traido := importar(c, pos, actual, rng, usados)):
+            j, precio = traido
+            movidos.add(id(j))
+            log.append(f"{j.corto} ({j.pos}, {J.nivel(j)}): del exterior → "
+                       f"{c.nombre}, {plata(precio)}")
         else:
-            mejores = [j for j in libres if j.pos == pos and J.nivel(j) >= actual + 2]
+            mejores = [j for j in libres if j.pos == pos and J.nivel(j) >= actual + 2
+                       and masa_salarial(c.plantel) + sueldo_pedido(j) <= c.ingreso]
             if mejores:
                 j = max(mejores, key=J.nivel)
                 fichar_libre(j, c, libres)
@@ -241,7 +336,11 @@ def movimientos_ia(equipos, mio, libres, rng, prob=0.5):
         while len(e.plantel) < PLANTEL_MIN + 2 and libres:
             pos, _ = necesidad(e)
             candidatos = [j for j in libres if j.pos == pos] or libres
-            j = max(candidatos, key=J.nivel)
+            # el mejor que puede pagar; si no le alcanza para ninguno, el más barato
+            margen = e.ingreso - masa_salarial(e.plantel)
+            pagables = [j for j in candidatos if sueldo_pedido(j) <= max(margen, SUELDO_MINIMO)]
+            j = (max(pagables, key=J.nivel) if pagables
+                 else min(candidatos, key=sueldo_pedido))
             fichar_libre(j, e, libres)
             log.append(f"{j.corto} ({j.pos}, {J.nivel(j)}): libre → {e.nombre}")
     return log

@@ -221,6 +221,9 @@ class Jugador:
     fisico: float = 1.0     # cómo llega al partido (1 = descansado)
     energia: float = 1.0    # durante el partido
     lesion: int = 0         # fechas que le quedan afuera por lesión
+    contrato: int = 0       # temporadas de contrato que le quedan (0 = libre o vencido)
+    sueldo: float = 0.0     # sueldo anual pactado, millones de dólares (0 = sin pactar)
+    partidos: int = 0       # partidos jugados en la temporada
 
     @property
     def completo(self):
@@ -503,7 +506,8 @@ def _a_dict(j):
     d = asdict(j)
     d.pop("fisico")
     d.pop("energia")
-    d.pop("lesion")
+    for campo in ("lesion", "contrato", "sueldo", "partidos"):
+        d.pop(campo)
     return d
 
 

@@ -181,6 +181,16 @@ FRASES = {
         "Los resultados no acompañan y los muchachos lo sienten.",
         "Me están criticando mucho afuera. Necesito saber que usted está conmigo.",
     ),
+    "vence": (
+        "A {jugador} se le termina el contrato. Es importante, presidente: renuévele.",
+        "Ojo con {jugador}: le queda un año. Si no lo renovamos, se va gratis.",
+        "{jugador} me preguntó por su contrato. No lo quiero perder.",
+    ),
+    "no_usa": (
+        "A {jugador} no lo estoy usando y cobra bastante. Véndalo o déjelo ir.",
+        "Le soy sincero: {jugador} no entra en mis planes. Busquémosle club.",
+        "{jugador} jugó {n} partidos. Con esa plata podemos traer a otro.",
+    ),
     "renuncia": (
         "Presidente, vengo a presentar mi renuncia. No hay más nada que hablar.",
         "Me voy. Le agradezco, pero así no puedo seguir.",
@@ -265,6 +275,24 @@ def reunion_venta(t, rng, jugador, pos, ventana):
                 ("Te traigo un reemplazo", (3, 0, 0), {"pos": pos, "nivel": 0, "ventana": ventana},
                  _resp(rng, "contento")),
                 ("Es mi club, decido yo", (-8, -2, 0), None, _resp(rng, "enojado")),
+            ]}
+
+
+def reunion_vence(t, rng, jugador):
+    return {"tema": "vence", "texto": _f(rng, FRASES["vence"], jugador=jugador.corto),
+            "opciones": [
+                ("Lo vamos a renovar", (3, 1, 0), None, _resp(rng, "contento")),
+                ("Si quiere seguir, que baje el sueldo", (-1, 0, 0), None, _resp(rng, "neutro")),
+                ("Si se va, se va", (-5, -2, 0), None, _resp(rng, "enojado")),
+            ]}
+
+
+def reunion_no_usa(t, rng, jugador, partidos):
+    return {"tema": "no_usa", "texto": _f(rng, FRASES["no_usa"], jugador=jugador.corto,
+                                          n=partidos),
+            "opciones": [
+                ("Lo pongo en venta", (3, 0, 0), None, _resp(rng, "contento")),
+                ("Se queda, dale minutos", (-3, 0, 0), None, _resp(rng, "neutro")),
             ]}
 
 
