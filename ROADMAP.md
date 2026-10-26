@@ -79,7 +79,7 @@ y no reprogramar.
 - **Zonas** (como la Primera Nacional, con dos de 18): el fixture se arma
   por zona y hay una final entre los ganadores.
 - **Reducido**: eliminación directa entre los que terminan del 2° al 8°,
-  con partido único o ida y vuelta, alargue y penales. Sirve también para
+  con partido único o ida y vuelta, alargue y penales. Sirve también para la
   copa que está en las ideas de más abajo.
 - **Promedios**: en Argentina el descenso de Primera se define por los
   puntos promedio de las últimas tres temporadas, además de la tabla anual.
