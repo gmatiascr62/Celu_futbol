@@ -34,10 +34,11 @@ plata, compras, ventas y si sigue o no en el cargo son tuyas.
 
 Orden sugerido:
 
-1. **Fundar un club** (punto 5): ya tiene dónde arrancar, en la Primera
-   Nacional.
-2. **Que el DT hable con IA** (punto 3), opcional, cuando quieras.
-3. Lo que falta del ascenso (punto 4), si hace falta.
+1. **Instalaciones y cuerpo técnico** (punto 6, primera parte).
+2. **Reserva y juveniles** (punto 6, segunda parte).
+3. **Fundar un club** (punto 5): queda para más adelante.
+4. **Que el DT hable con IA** (punto 3), opcional.
+5. Lo que falta del ascenso (punto 4), si hace falta.
 
 Lo que falta del DT (punto 2) y las ideas del final se pueden ir metiendo
 en el medio.
@@ -71,6 +72,9 @@ libremente para elegir cuál de las opciones es.
   inventar plata ni jugadores. Contesta en un formato fijo que el
   programa valida.
 - Sin internet o sin clave, vuelve a las frases armadas del punto 2.
+- Las decisiones dentro del partido (táctica, cambios, titulares) siguen
+  siendo del código: son cientos por fecha, el nivel gratis no alcanza, y
+  el DT entrenado decide mejor que un modelo de lenguaje.
 
 ### 4. El ascenso: lo que falta
 La primera parte ya está (1.4): Liga Profesional y Primera Nacional, 32
@@ -106,6 +110,44 @@ hacer cuando quieras.
 - **Partida propia**: la temporada se guarda igual que ahora, con el
   historial del club desde su fundación: ascensos, títulos, goleadores
   históricos e ídolos.
+
+### 6. Instalaciones, cuerpo técnico y juveniles
+En qué gastar la plata del club para que los jugadores mejoren más.
+Los efectos se calibran para que un club promedio quede como ahora: lo
+que ya está ajustado (goles, empates, nivel de la liga) no cambia, y la
+diferencia la marca quién invierte más.
+
+**Primera parte: instalaciones y cuerpo técnico**
+
+- **Instalaciones**, cada una de nivel 1 a 5. Mejorar cuesta plata, la
+  obra tarda unas fechas y cada nivel tiene un mantenimiento por año:
+  - Predio de entrenamiento: los jugadores mejoran más rápido entrenando.
+  - Centro médico: menos lesiones, y las que hay duran menos.
+  - Estadio: más socios y entradas, más ingresos.
+  - Inferiores: mejores juveniles, y más.
+- Cada club arranca con niveles según su tamaño (Boca y River con 4, un
+  club chico del ascenso con 1 o 2). Los clubes de la computadora también
+  invierten: la plata que hoy se les pierde por el tope de caja va a
+  instalaciones.
+- **Cuerpo técnico**, que se contrata de una lista; cada uno tiene un
+  nivel y cuanto mejor, más cobra:
+  - Preparador físico: más resistencia y mejor recuperación entre fechas.
+  - Ayudante de ataque y ayudante de defensa: mejoran esas
+    características cuando se entrenan.
+  - Entrenador de arqueros: mejora la atajada.
+  - Coordinador de inferiores: desarrolla mejor a los pibes.
+- El DT puede pedirlos en las reuniones.
+
+**Segunda parte: reserva y juveniles**
+
+- Una reserva aparte del plantel. Cada pretemporada llegan pibes de 16 a
+  18 años, más y mejores según las inferiores y el coordinador.
+- Crecen en la reserva sin ocupar lugar en el plantel. Vos decidís cuándo
+  subirlos a Primera, o los liberás. El DT avisa cuando uno está listo.
+- El potencial de los pibes no se ve exacto, se ve en estrellas
+  (★★★☆☆). Un buen coordinador lo afina. Así alguno sorprende y alguno
+  decepciona.
+- Vender juveniles al exterior, la forma de hacer plata de un club chico.
 
 ## Ideas para más adelante
 
