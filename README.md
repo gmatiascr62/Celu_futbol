@@ -19,7 +19,8 @@ Menú principal:
 1. **Partido**: dos equipos, con relato completo. Después se puede repetir,
    simular 1000 partidos para ver las probabilidades o cambiar los DT.
 2. **Cuadrangular**: 4 equipos, todos contra todos, ida y vuelta.
-3. **Torneo largo**: los 32 clubes, ida y vuelta (62 fechas). Seguís a un
+3. **Torneo largo**: Liga Profesional y Primera Nacional, 32 clubes cada
+   una, ida y vuelta (62 fechas), con ascensos y descensos. Seguís a un
    club, elegís su DT y su entrenamiento, comprás y vendés jugadores, y
    podés jugar temporadas seguidas. Se guarda solo después de cada fecha.
 4. **Ver plantel**: la ficha de los 24 jugadores de cada club.
@@ -103,6 +104,19 @@ no se borra cuando se baja una versión nueva.
 
 ### Torneo largo y temporadas
 
+- **Dos categorías**: la Liga Profesional (los clubes del modelo) y la
+  Primera Nacional (`ascenso.json`), que juegan en paralelo. Al final de
+  cada temporada bajan los 2 últimos de Primera y suben los 2 primeros del
+  ascenso. Subir multiplica los ingresos por 1,5 y bajar los divide.
+- No hay resultados reales de la Primera Nacional para entrenar el modelo,
+  así que la fuerza de cada club se estima con su peso histórico (de 1 a
+  5, editable en `ascenso.json`). Un club de peso 5 queda como los recién
+  ascendidos reales: medio punto por debajo de la media de la Primera en la
+  escala del modelo.
+- Podés seguir a cualquier club de las dos categorías. La tabla, los
+  goleadores y los resultados muestran tu división; las opciones 4 y 5
+  preguntan cuál querés ver.
+
 - **Entrenamiento entre fechas**: completo, ataque, defensa, físico o
   descanso, con intensidad suave, normal o fuerte. El nivel sube hacia el
   potencial, más rápido en los jóvenes. Entrenar fuerte rinde más, pero
@@ -160,7 +174,8 @@ no se borra cuando se baja una versión nueva.
 | `tecnicos.py` | Los DT como personas: ánimo, reuniones, promesas y despidos. |
 | `modelo_poisson.json` | El modelo de goles entrenado con la liga argentina. |
 | `dt_ia.json` | Lo que aprendieron los DT. |
-| `planteles.json` | Los planteles de los 32 clubes. |
+| `planteles.json` | Los planteles de los 64 clubes. |
+| `ascenso.json` | Los clubes de la Primera Nacional y su peso histórico. |
 | `entrenar_modelo.py` | Reentrena el modelo de goles con datos de football-data.co.uk. |
 | `entrenar_dt.py` | Entrena a los DT. |
 

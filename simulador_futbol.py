@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-SIMULADOR DE FÚTBOL — 1.3
+SIMULADOR DE FÚTBOL — 1.4
 El partido se juega minuto a minuto con un modelo de Poisson entrenado con
 partidos reales (ver entrenar_modelo.py). Cada equipo puede tener un DT con
 IA que cambia la táctica según el resultado y el tiempo que queda.
@@ -27,6 +27,9 @@ sueldos, y el mercado abre en la pretemporada y a mitad del torneo.
 Los DT son personas (ver tecnicos.py): tienen nombre, prestigio, sueldo,
 contrato y ánimo. El de tu club te pide reuniones, se acuerda de lo que le
 prometiste y puede renunciar; a los de los otros clubes los echan.
+
+El torneo largo tiene dos categorías: la Liga Profesional y la Primera
+Nacional (ver ascenso.json). Bajan los 2 últimos y suben los 2 primeros.
 
 Uso:
     python simulador_futbol.py                     # usa modelo_poisson.json
@@ -845,6 +848,35 @@ def cargar_modelo(ruta):
     return MODELO_VACIO
 
 
+# Primera Nacional: no hay resultados reales para entrenar el modelo, así que
+# la fuerza de cada club se estima con su peso histórico (1 a 5). Los recién
+# ascendidos a Primera están medio punto por debajo de la media en la escala
+# del modelo (ataque menos defensa): eso es un club de peso 5 del ascenso.
+ARCHIVO_ASCENSO = "ascenso.json"
+CAMBIOS_DE_CATEGORIA = 2     # bajan los 2 últimos y suben los 2 primeros
+
+
+def cargar_ascenso(modelo, ruta=ARCHIVO_ASCENSO):
+    """Agrega los clubes del ascenso al modelo y anota la división de cada club."""
+    primera = list(modelo["equipos"])
+    modelo["division"] = {c: 0 for c in primera}
+    modelo["divisiones"] = ["Liga Profesional"]
+    if not primera or not os.path.exists(ruta):
+        return
+    with open(ruta, encoding="utf-8") as f:
+        datos = json.load(f)
+    for club, peso in datos["clubes"].items():
+        if club in modelo["equipos"]:
+            continue
+        rng = random.Random(f"ascenso|{club}")
+        neto = -1.10 + 0.12 * peso + rng.gauss(0, 0.08)
+        sesgo = rng.gauss(0, 0.08)            # más de ataque o más de defensa
+        modelo["equipos"][club] = {"ataque": neto / 2 + sesgo, "defensa": -neto / 2 + sesgo}
+        modelo["division"][club] = 1
+    modelo["divisiones"].append(datos["nombre"])
+    print(f"Ascenso cargado: {len(datos['clubes'])} clubes de la {datos['nombre']}.")
+
+
 # ---------------------------------------------------------------- cuadrangular
 # Todos contra todos, ida y vuelta: 6 fechas, 2 partidos por fecha.
 # Cada par de números es (local, visitante) según el orden de los equipos.
@@ -1050,6 +1082,32 @@ def ruta_partida():
     return os.path.join(os.environ.get("FUTBOL_PARTIDAS") or ".", ARCHIVO_PARTIDA)
 
 
+def division_de(p, club):
+    return p["division"].get(club, 0)
+
+
+def tabla_division(p, d):
+    return {n: f for n, f in p["tabla"].items() if division_de(p, n) == d}
+
+
+def goleadores_division(p, d):
+    return Counter({k: v for k, v in p["goleadores"].items() if division_de(p, k[1]) == d})
+
+
+def division_a_mostrar(p):
+    """La división del club que seguís (o la Primera)."""
+    return division_de(p, p["mio"]) if p["mio"] else 0
+
+
+def pedir_division(p):
+    if len(p["divisiones"]) == 1:
+        return 0
+    for i, nombre in enumerate(p["divisiones"], 1):
+        print(f"{i}) {nombre}")
+    return pedir_numero(f"División [{division_a_mostrar(p) + 1}]: ", 1, len(p["divisiones"]),
+                        defecto=division_a_mostrar(p) + 1) - 1
+
+
 def guardar_partida(p):
     datos = dict(p, version=VERSION_PARTIDA,
                  equipos=[asdict(e) for e in p["equipos"]],
@@ -1091,6 +1149,9 @@ def cargar_partida():
     mios = {j.completo: j for e in equipos if e.nombre == datos["mio"] for j in e.plantel}
     datos["ofertas"] = [(c, mios[n], m) for c, n, m in datos.get("ofertas", []) if n in mios]
     datos.setdefault("ventana", None)
+    # las partidas de antes del ascenso siguen con una sola división
+    datos.setdefault("division", {e.nombre: 0 for e in equipos})
+    datos.setdefault("divisiones", ["Liga Profesional"])
     datos.setdefault("movimientos", [])
     datos.setdefault("sondeos", {})
     # las partidas de antes de los DT con ánimo arrancan con DT nuevos
@@ -1099,6 +1160,8 @@ def cargar_partida():
         datos["dts_libres"] = [T.de_dict(d) for d in datos["dts_libres"]]
     else:
         iniciar_tecnicos(datos)
+    if "esperado_global" not in datos:
+        calcular_esperado(datos)
     return datos
 
 
@@ -1140,6 +1203,8 @@ def nueva_partida(modelo):
     M.iniciar_finanzas(equipos)
     p = {"equipos": equipos, "mio": mio, "plan_mio": None, "temporada": 0,
          "semilla": random.randrange(10 ** 9), "historial": [],
+         "division": {c: modelo.get("division", {}).get(c, 0) for c in sorted(PLANTELES)},
+         "divisiones": modelo.get("divisiones", ["Liga Profesional"]),
          "libres": [], "ofertas": [], "ventana": None, "movimientos": [], "sondeos": {}}
     empezar_temporada(p)
     iniciar_tecnicos(p)
@@ -1149,8 +1214,15 @@ def nueva_partida(modelo):
 def empezar_temporada(p):
     p["temporada"] += 1
     reponer_fisico(*p["equipos"])
-    p["fixture"] = armar_fixture(len(p["equipos"]),
-                                 random.Random(f"{p['semilla']}|{p['temporada']}"))
+    # cada división arma su fixture; en cada fecha juegan todas
+    rng = random.Random(f"{p['semilla']}|{p['temporada']}")
+    p["fixture"] = []
+    for d in range(len(p["divisiones"])):
+        indices = [i for i, e in enumerate(p["equipos"]) if division_de(p, e.nombre) == d]
+        for k, fecha in enumerate(armar_fixture(len(indices), rng)):
+            if k == len(p["fixture"]):
+                p["fixture"].append([])
+            p["fixture"][k] += [(indices[a], indices[b]) for a, b in fecha]
     p["tabla"] = {e.nombre: Counter(PJ=0) for e in p["equipos"]}
     p["goleadores"] = Counter()
     p["numero"] = 0
@@ -1161,16 +1233,47 @@ def empezar_temporada(p):
         arrancar_temporada_dt(p)
 
 
+def cambios_de_categoria(p):
+    """Quiénes bajan y quiénes suben: [(club, de, a)]."""
+    cambios = []
+    for d in range(len(p["divisiones"]) - 1):
+        arriba = [n for n, _ in ordenar_tabla(tabla_division(p, d))]
+        abajo = [n for n, _ in ordenar_tabla(tabla_division(p, d + 1))]
+        cambios += [(n, d, d + 1) for n in arriba[-CAMBIOS_DE_CATEGORIA:]]
+        cambios += [(n, d + 1, d) for n in abajo[:CAMBIOS_DE_CATEGORIA]]
+    return cambios
+
+
+SUBA_DE_INGRESOS = 1.5       # subir a una categoría más arriba multiplica los ingresos
+
+
 def cerrar_temporada(p):
-    """Anota el campeón en el historial y pasa el año de todos los planteles."""
-    campeon, f = ordenar_tabla(p["tabla"])[0]
-    (goleador, club), goles = p["goleadores"].most_common(1)[0]
-    registro = {"temporada": p["temporada"], "campeon": campeon, "puntos": f["Pts"],
-                "goleador": f"{goleador} ({club}), {goles}"}
+    """Anota los campeones en el historial, hace los ascensos y descensos,
+    y pasa el año de todos los planteles."""
+    registro = {"temporada": p["temporada"], "campeones": []}
+    for d, nombre in enumerate(p["divisiones"]):
+        campeon, f = ordenar_tabla(tabla_division(p, d))[0]
+        registro["campeones"].append([nombre, campeon, f["Pts"]])
+        orden = [n for n, _ in ordenar_tabla(tabla_division(p, d))]
+        M.premios([e for e in p["equipos"] if division_de(p, e.nombre) == d], orden, p["mio"])
+    registro["campeon"], registro["puntos"] = registro["campeones"][0][1:]
+    (goleador, club), goles = goleadores_division(p, 0).most_common(1)[0]
+    registro["goleador"] = f"{goleador} ({club}), {goles}"
     if p["mio"]:
-        registro["puesto"] = posicion(p["tabla"], p["mio"])[0]
+        d = division_de(p, p["mio"])
+        registro["puesto"] = posicion(tabla_division(p, d), p["mio"])[0]
+        registro["division_mio"] = p["divisiones"][d]
+    registro["ascensos"], registro["descensos"] = [], []
+    for club, de, a in cambios_de_categoria(p):
+        p["division"][club] = a
+        e = next(x for x in p["equipos"] if x.nombre == club)
+        if a < de:
+            e.ingreso = round(e.ingreso * SUBA_DE_INGRESOS, 3)
+            registro["ascensos"].append(club)
+        else:
+            e.ingreso = round(e.ingreso / SUBA_DE_INGRESOS, 3)
+            registro["descensos"].append(club)
     p["historial"].append(registro)
-    M.premios(p["equipos"], [n for n, _ in ordenar_tabla(p["tabla"])], p["mio"])
     for j in p["libres"]:
         j.edad += 1
     rng = random.Random(f"{p['semilla']}|{p['temporada']}|retiros")
@@ -1192,10 +1295,18 @@ def cerrar_temporada(p):
 def mostrar_historial(p):
     print("\n=== HISTORIAL ===")
     for r in p["historial"]:
-        print(f"Temporada {r['temporada']}: 🏆 {r['campeon']} ({r['puntos']} pts)")
+        print(f"Temporada {r['temporada']}:")
+        for nombre, campeon, pts in r.get("campeones", [["", r["campeon"], r["puntos"]]]):
+            print(f"  🏆 {campeon} ({pts} pts)" + (f" · {nombre}" if nombre else ""))
         if "puesto" in r:
-            print(f"  {p['mio']}: {r['puesto']}°")
+            donde = f" en la {r['division_mio']}" if "division_mio" in r else ""
+            print(f"  {p['mio']}: {r['puesto']}°{donde}")
         print(f"  Goleador: {r['goleador']}")
+        if r.get("ascensos"):
+            print(textwrap.fill("  ⬆ Suben: " + ", ".join(r["ascensos"]), ANCHO,
+                                subsequent_indent="    "))
+            print(textwrap.fill("  ⬇ Bajan: " + ", ".join(r["descensos"]), ANCHO,
+                                subsequent_indent="    "))
     if not p["historial"]:
         print("Todavía no terminó ninguna temporada.")
 
@@ -1204,7 +1315,7 @@ def torneo_largo(modelo):
     if len(PLANTELES) < 4:
         print("Hacen falta al menos 4 clubes reales en el modelo.")
         return
-    print(f"\n=== TORNEO LARGO: {len(PLANTELES)} equipos, ida y vuelta ===")
+    print("\n=== TORNEO LARGO ===")
     p = cargar_partida()
     if p:
         club = f", {p['mio']}" if p["mio"] else ""
@@ -1217,6 +1328,10 @@ def torneo_largo(modelo):
         p = nueva_partida(modelo)
         guardar_partida(p)
     equipos, mio = p["equipos"], p["mio"]
+    print(f"{len(equipos)} equipos, ida y vuelta.")
+    if len(p["divisiones"]) > 1:
+        print(f"{' y '.join(p['divisiones'])}: bajan los {CAMBIOS_DE_CATEGORIA} últimos")
+        print(f"y suben los {CAMBIOS_DE_CATEGORIA} primeros.")
     informe = None             # lo que pasó en el último entrenamiento de tu club
 
     def jugar_fecha(con_relato):
@@ -1247,7 +1362,8 @@ def torneo_largo(modelo):
             marcadores[local.nombre], marcadores[visitante.nombre] = (gl, gv), (gv, gl)
             for lado, j, _ in stats["goles"]:
                 p["goleadores"][(j.corto, (local if lado == "L" else visitante).nombre)] += 1
-            resultados.append((es_mio, f"{local.nombre[:15]} {gl}-{gv} {visitante.nombre[:15]}"))
+            resultados.append((es_mio, f"{local.nombre[:15]} {gl}-{gv} {visitante.nombre[:15]}",
+                               division_de(p, local.nombre)))
         # Recuperación y entrenamiento de la semana
         rng_entreno = random.Random(f"{clave}|entrenamiento")
         for e in equipos:
@@ -1265,8 +1381,10 @@ def torneo_largo(modelo):
 
     def resumen_mio():
         if mio:
-            pos, f = posicion(p["tabla"], mio)
-            print(f"\n{mio}: {pos}° con {f['Pts']} puntos "
+            d = division_de(p, mio)
+            pos, f = posicion(tabla_division(p, d), mio)
+            donde = f" en la {p['divisiones'][d]}" if len(p["divisiones"]) > 1 else ""
+            print(f"\n{mio}: {pos}°{donde} con {f['Pts']} puntos "
                   f"({f['G']}G {f['E']}E {f['P']}P)")
             print(f"Caja: {M.plata(mi_equipo().caja)}")
 
@@ -1304,9 +1422,11 @@ def torneo_largo(modelo):
         if opcion == "1":
             resultados = jugar_fecha(con_relato=True)
             input("\nEnter para ver los resultados de la fecha...")
-            print(f"\nResultados de la fecha {p['numero']}:")
-            for es_mio, r in resultados:
-                print(("► " if es_mio else "  ") + r)
+            d = division_a_mostrar(p)
+            print(f"\nResultados de la fecha {p['numero']} ({p['divisiones'][d]}):")
+            for es_mio, r, div in resultados:
+                if div == d:
+                    print(("► " if es_mio else "  ") + r)
             resumen_mio()
             if informe:
                 mostrar_entrenamiento(mio, *informe)
@@ -1315,7 +1435,7 @@ def torneo_largo(modelo):
             hasta = total if opcion == "3" else min(total, p["numero"] + 5)
             while p["numero"] < hasta:
                 resultados = jugar_fecha(con_relato=False)
-                propio = [r for es_mio, r in resultados if es_mio]
+                propio = [r for es_mio, r, _ in resultados if es_mio]
                 print(f"Fecha {p['numero']}: " + (propio[0] if propio else "jugada"))
                 mostrar_noticias(p)
                 # se corta si tu DT quiere hablar de algo grave
@@ -1324,9 +1444,9 @@ def torneo_largo(modelo):
                     break
             resumen_mio()
         elif opcion == "4":
-            mostrar_tabla(p["tabla"])
+            mostrar_tabla(tabla_division(p, pedir_division(p)))
         elif opcion == "5":
-            mostrar_goleadores(p["goleadores"], 10)
+            mostrar_goleadores(goleadores_division(p, pedir_division(p)), 10)
         elif opcion == "6":
             guardar_partida(p)
             print("Partida guardada. La seguís desde 'Torneo largo'.")
@@ -1372,8 +1492,14 @@ def fuerza_titular(e):
 
 
 def calcular_esperado(p):
-    orden = sorted(p["equipos"], key=fuerza_titular, reverse=True)
-    p["esperado"] = {e.nombre: i for i, e in enumerate(orden, 1)}
+    """Puesto que se espera de cada club en su división (para la presión) y
+    en todo el fútbol (para el prestigio de su DT)."""
+    orden = sorted(p["equipos"], key=lambda e: (division_de(p, e.nombre), -fuerza_titular(e)))
+    p["esperado_global"] = {e.nombre: i for i, e in enumerate(orden, 1)}
+    p["esperado"] = {}
+    for d in range(len(p["divisiones"])):
+        en_d = [e for e in orden if division_de(p, e.nombre) == d]
+        p["esperado"].update({e.nombre: i for i, e in enumerate(en_d, 1)})
 
 
 def iniciar_tecnicos(p):
@@ -1386,7 +1512,7 @@ def iniciar_tecnicos(p):
     for e in p["equipos"]:
         if e.dt is None:          # sin DT: táctica fija
             continue
-        prestigio = T.prestigio_para(p["esperado"][e.nombre], total, rng)
+        prestigio = T.prestigio_para(p["esperado_global"][e.nombre], total, rng)
         p["tecnicos"][e.nombre] = T.nuevo(rng, usados, e.dt, prestigio)
         e.ingreso += p["tecnicos"][e.nombre].sueldo   # el club ya contaba con pagarle
     p["dts_libres"] = []
@@ -1458,7 +1584,7 @@ def reemplazar_dt(p, e, rng, motivo):
     mejor le cuadra según su tamaño."""
     viejo = p["tecnicos"].get(e.nombre)
     total = len(p["equipos"])
-    buscado = T.prestigio_para(p["esperado"][e.nombre], total, rng)
+    buscado = T.prestigio_para(p["esperado_global"][e.nombre], total, rng)
     candidatos = [t for t in p["dts_libres"] if t.ultimo_club != e.nombre]
     nuevo = min(candidatos, key=lambda t: abs(t.prestigio - buscado) + rng.random() * 5)
     p["dts_libres"].remove(nuevo)
@@ -1488,7 +1614,7 @@ def tras_fecha_dt(p, marcadores, cierra):
         if t is None:
             continue
         T.tras_partido(t, gf, gc)
-        puesto = posicion(p["tabla"], e.nombre)[0]
+        puesto = posicion(tabla_division(p, division_de(p, e.nombre)), e.nombre)[0]
         T.actualizar_presion(t, puesto, p["esperado"][e.nombre], p["ultimos"][e.nombre],
                              jugadas)
         if e.nombre != p["mio"] and T.lo_echan(t, rng):
@@ -2019,18 +2145,26 @@ def renovaciones(p):
 def fin_de_temporada(p):
     """Muestra el cierre de la temporada y pregunta si se sigue con la próxima.
     Devuelve True si empieza otra."""
-    tabla, goleadores, mio = p["tabla"], p["goleadores"], p["mio"]
-    mostrar_tabla(tabla)
-    mostrar_goleadores(goleadores, 10)
-    campeon, f = ordenar_tabla(tabla)[0]
-    print("\n" + "*" * ANCHO)
-    print(f" 🏆 CAMPEÓN TEMPORADA {p['temporada']}: {campeon}")
-    print(f" {f['Pts']} puntos, {f['G']} ganados, {f['E']} empatados, {f['P']} perdidos")
-    (j, club), n = goleadores.most_common(1)[0]
-    print(f" ⚽ Goleador: {j} ({club}), {n} goles")
-    print("*" * ANCHO)
+    mio = p["mio"]
+    d_mio = division_a_mostrar(p)
+    mostrar_tabla(tabla_division(p, d_mio))
+    mostrar_goleadores(goleadores_division(p, d_mio), 10)
+    for d, nombre in enumerate(p["divisiones"]):
+        campeon, f = ordenar_tabla(tabla_division(p, d))[0]
+        print("\n" + "*" * ANCHO)
+        print(f" 🏆 CAMPEÓN {nombre.upper()} {p['temporada']}: {campeon}")
+        print(f" {f['Pts']} puntos, {f['G']} ganados, {f['E']} empatados, {f['P']} perdidos")
+        goleadores = goleadores_division(p, d)
+        if goleadores:
+            (j, club), n = goleadores.most_common(1)[0]
+            print(f" ⚽ Goleador: {j} ({club}), {n} goles")
+        print("*" * ANCHO)
+    for club, de, a in cambios_de_categoria(p):
+        flecha = "⬆ Asciende" if a < de else "⬇ Desciende"
+        marca = "► " if club == mio else ""
+        print(f"{marca}{flecha}: {club}")
     if mio:
-        pos, f = posicion(tabla, mio)
+        pos, f = posicion(tabla_division(p, d_mio), mio)
         print(f"\n{mio}: {pos}° con {f['Pts']} puntos "
               f"({f['G']}G {f['E']}E {f['P']}P)")
     print("\n1) Jugar la temporada siguiente")
@@ -2038,7 +2172,14 @@ def fin_de_temporada(p):
     if input("> ").strip() != "1":
         guardar_partida(p)
         return False
+    d_antes = division_a_mostrar(p)
     cambios = cerrar_temporada(p)
+    if mio and division_a_mostrar(p) != d_antes:
+        nueva = p["divisiones"][division_a_mostrar(p)]
+        if division_a_mostrar(p) < d_antes:
+            print(f"\n🎉 ¡{mio} ASCENDIÓ a la {nueva}! Los ingresos suben un 50%.")
+        else:
+            print(f"\n😢 {mio} descendió a la {nueva}. Los ingresos bajan.")
     if mio:
         retirados, juveniles = cambios[mio]
         print(f"\n=== {mio}: pretemporada ===")
@@ -2096,9 +2237,10 @@ def ver_plantel(modelo):
 
 def main():
     global PLANTELES
-    print("SIMULADOR DE FÚTBOL — 1.3")
+    print("SIMULADOR DE FÚTBOL — 1.4")
     ruta = sys.argv[1] if len(sys.argv) > 1 else "modelo_poisson.json"
     modelo = cargar_modelo(ruta)
+    cargar_ascenso(modelo)
     PLANTELES = J.cargar_planteles(modelo)
     cargar_cerebro()
     while True:
