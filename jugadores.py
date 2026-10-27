@@ -401,9 +401,10 @@ EDAD_RETIRO = 34          # los arqueros duran 2 años más
 EDAD_RETIRO_SEGURO = 40
 
 
-def pasar_temporada(plantel, ataque, defensa, rng, usados):
+def pasar_temporada(plantel, ataque, defensa, rng, usados, cantera=0.0):
     """Envejece el plantel. ataque y defensa: la fuerza del club en el modelo,
-    que define el nivel de los juveniles. Devuelve (retirados, juveniles)."""
+    que define el nivel de los juveniles; cantera: cuánto mejores salen por
+    las inferiores del club (0 = como siempre). Devuelve (retirados, juveniles)."""
     meta_of, meta_de = metas(ataque, defensa)
     retirados, juveniles = [], []
     for j in list(plantel):
@@ -424,9 +425,9 @@ def pasar_temporada(plantel, ataque, defensa, rng, usados):
     apellidos_club = {j.apellido for j in plantel}
     for viejo in retirados:
         nuevo = generar_jugador(viejo.pos, rng.randint(17, 21), meta_of, meta_de,
-                                rng.gauss(-6, 4), rng, usados, apellidos_club)
+                                rng.gauss(-6 + cantera, 4), rng, usados, apellidos_club)
         _redondear(nuevo)
-        nuevo.potencial = _potencial(nuevo, rng)
+        nuevo.potencial = min(99, _potencial(nuevo, rng) + max(0, round(cantera)))
         plantel.append(nuevo)
         juveniles.append(nuevo)
     return retirados, juveniles
@@ -460,13 +461,20 @@ def ritmo_edad(edad):
     return 1.4 if edad <= 21 else 1.0 if edad <= 25 else 0.6 if edad <= 29 else 0.3
 
 
-def entrenar(plantel, tipo, intensidad, rng):
+SIN_EFECTO = {}   # multiplicadores de un club "promedio" (ver club.py)
+
+
+def entrenar(plantel, tipo, intensidad, rng, mult=SIN_EFECTO):
     """Una semana de entrenamiento. Devuelve (mejoras, lesionados):
     mejoras = [(jugador, nivel antes, nivel después)] de los que subieron
-    al menos un punto; lesionados = [(jugador, fechas afuera)]."""
+    al menos un punto; lesionados = [(jugador, fechas afuera)].
+    mult: lo que aportan las instalaciones y el cuerpo técnico del club
+    (progreso, cada atributo, resistencia, lesiones y su duración)."""
     progreso, fisico, riesgo = INTENSIDADES[intensidad]
     if tipo == "descanso":
         progreso, fisico, riesgo = 0.0, RECUPERO_DESCANSO, 0.0
+    progreso *= mult.get("progreso", 1.0)
+    riesgo *= mult.get("lesion", 1.0)
     mejoras, lesionados = [], []
     for j in plantel:
         if j.lesion:
@@ -475,6 +483,7 @@ def entrenar(plantel, tipo, intensidad, rng):
         j.fisico = max(0.5, min(1.0, j.fisico + fisico))
         if tipo == "fisico":
             j.resistencia = min(95, j.resistencia + RITMO_RESISTENCIA * progreso
+                                * mult.get("resistencia", 1.0)
                                 * ritmo_edad(j.edad) * rng.uniform(0.5, 1.5))
         elif progreso:
             if j.pos == "ARQ":
@@ -486,17 +495,18 @@ def entrenar(plantel, tipo, intensidad, rng):
             if attrs and margen > 0:
                 paso = (RITMO * progreso * ritmo_edad(j.edad) * margen
                         * rng.uniform(0.5, 1.5) * (1 if tipo == "completo" else ENFOQUE))
+                pasos = {a: paso * mult.get(a, 1.0) for a in attrs}
                 for a in attrs:
-                    setattr(j, a, min(99, getattr(j, a) + paso))
+                    setattr(j, a, min(99, getattr(j, a) + pasos[a]))
                 # el nivel nunca pasa el potencial
                 subio = puntaje(j, j.pos, con_fisico=False) - antes
                 if subio > margen:
                     for a in attrs:
-                        setattr(j, a, getattr(j, a) - paso * (1 - margen / subio))
+                        setattr(j, a, getattr(j, a) - pasos[a] * (1 - margen / subio))
                 if nivel(j) > round(antes):
                     mejoras.append((j, round(antes), nivel(j)))
         if riesgo and rng.random() < riesgo:
-            j.lesion = rng.choice((1, 1, 2, 2, 3, 4))
+            j.lesion = max(1, rng.choice((1, 1, 2, 2, 3, 4)) - mult.get("dur", 0))
             lesionados.append((j, j.lesion))
     return mejoras, lesionados
 

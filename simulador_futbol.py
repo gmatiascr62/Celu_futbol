@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-SIMULADOR DE FÚTBOL — 1.4
+SIMULADOR DE FÚTBOL — 1.5
 El partido se juega minuto a minuto con un modelo de Poisson entrenado con
 partidos reales (ver entrenar_modelo.py). Cada equipo puede tener un DT con
 IA que cambia la táctica según el resultado y el tiempo que queda.
@@ -31,6 +31,9 @@ prometiste y puede renunciar; a los de los otros clubes los echan.
 El torneo largo tiene dos categorías: la Liga Profesional y la Primera
 Nacional (ver ascenso.json). Bajan los 2 últimos y suben los 2 primeros.
 
+Cada club tiene instalaciones y cuerpo técnico (ver club.py), que hacen que
+los jugadores mejoren más rápido, se lesionen menos y salgan mejores pibes.
+
 Uso:
     python simulador_futbol.py                     # usa modelo_poisson.json
     python simulador_futbol.py otro_modelo.json    # usa otro modelo
@@ -45,9 +48,10 @@ import random
 import sys
 import textwrap
 from collections import Counter
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 
 import jugadores as J
+import club as C
 import mercado as M
 import tecnicos as T
 
@@ -176,6 +180,9 @@ class Equipo:
     caja: float = 0.0                  # millones de dólares
     ingreso: float = 0.0               # ingreso anual, millones de dólares
     moral: float = 1.0                 # multiplica los goles: la confianza del DT
+    instalaciones: dict = field(default_factory=dict)   # ver club.py
+    staff: dict = field(default_factory=dict)           # cuerpo técnico
+    obras: list = field(default_factory=list)           # [instalación, fechas que faltan]
 
 
 PLANTELES = {}   # se cargan de planteles.json
@@ -1163,6 +1170,8 @@ def cargar_partida():
         iniciar_tecnicos(datos)
     if "esperado_global" not in datos:
         calcular_esperado(datos)
+    if "staff_libres" not in datos:     # partidas de antes de las instalaciones
+        iniciar_club(datos)
     return datos
 
 
@@ -1209,6 +1218,7 @@ def nueva_partida(modelo):
          "libres": [], "ofertas": [], "ventana": None, "movimientos": [], "sondeos": {}}
     empezar_temporada(p)
     iniciar_tecnicos(p)
+    iniciar_club(p)
     return p
 
 
@@ -1232,6 +1242,8 @@ def empezar_temporada(p):
             j.partidos = 0
     if "tecnicos" in p:
         arrancar_temporada_dt(p)
+    if "staff_libres" in p:
+        renovar_staff_libres(p)
 
 
 def cambios_de_categoria(p):
@@ -1285,7 +1297,8 @@ def cerrar_temporada(p):
             j.contrato -= 1
     cambios = {}
     for e in p["equipos"]:
-        cambios[e.nombre] = J.pasar_temporada(e.plantel, e.ataque, e.defensa, rng, usados)
+        cambios[e.nombre] = J.pasar_temporada(e.plantel, e.ataque, e.defensa, rng, usados,
+                                              C.cantera(e) if e.instalaciones else 0.0)
         for j in cambios[e.nombre][1]:       # los juveniles firman su primer contrato
             M.firmar(j, anios=3)
     p["fin_contratos"] = M.vencimientos_ia(p["equipos"], p["mio"], p["libres"], rng)
@@ -1334,6 +1347,7 @@ def torneo_largo(modelo):
         print(f"{' y '.join(p['divisiones'])}: bajan los {CAMBIOS_DE_CATEGORIA} últimos")
         print(f"y suben los {CAMBIOS_DE_CATEGORIA} primeros.")
     informe = None             # lo que pasó en el último entrenamiento de tu club
+    informe_obras = []         # obras de tu club que se terminaron
 
     def jugar_fecha(con_relato):
         nonlocal informe
@@ -1369,18 +1383,28 @@ def torneo_largo(modelo):
         rng_entreno = random.Random(f"{clave}|entrenamiento")
         for e in equipos:
             for j in e.plantel:
-                j.fisico = min(1.0, j.fisico + RECUPERO_FECHA)
+                j.fisico = min(1.0, j.fisico + RECUPERO_FECHA + C.recupero_extra(e))
             plan_mio = p["plan_mio"]
             plan = plan_mio if e.nombre == mio and plan_mio else plan_dt(e, rng_entreno)
-            mejoras, lesionados = J.entrenar(e.plantel, *plan, rng_entreno)
+            mejoras, lesionados = J.entrenar(e.plantel, *plan, rng_entreno,
+                                             C.multiplicadores(e))
             if e.nombre == mio:
                 informe = (plan, mejoras, lesionados, plan_mio is None)
         M.cobrar_fecha(equipos, len(fixture))
+        for e in equipos:
+            C.pagar_fecha(e, len(fixture))
+            for tipo in C.avanzar_obras(e):
+                if e.nombre == mio:
+                    informe_obras.append(f"🏗 Terminó la obra: {C.INSTALACIONES[tipo]} "
+                                         f"nivel {e.instalaciones[tipo]}.")
         tras_fecha_dt(p, marcadores, cierra)
         guardar_partida(p)
         return resultados
 
     def resumen_mio():
+        for texto in informe_obras:
+            print(texto)
+        informe_obras.clear()
         if mio:
             d = division_de(p, mio)
             pos, f = posicion(tabla_division(p, d), mio)
@@ -1419,12 +1443,12 @@ def torneo_largo(modelo):
             print("10) Mercado de pases " + ("(abierto)" if abierto else "(cerrado)"))
             if not p["sin_dt"]:
                 print("11) Mi DT")
+            print("12) Instalaciones y cuerpo técnico")
         opcion = input("> ").strip()
         if opcion in ("1", "2", "3") and mio and promesas_pendientes(p):
             for pr in promesas_pendientes(p):
-                print(textwrap.fill(f"⚠ Le prometiste al DT un {T.puesto(pr['pos'])} "
-                                    f"(nivel {pr['nivel']} o más) y el mercado cierra con "
-                                    f"esta fecha.", ANCHO))
+                print(textwrap.fill(f"⚠ Le prometiste al DT un {T.que_prometio(pr)} "
+                                    f"y el plazo vence con esta fecha.", ANCHO))
             print("¿Jugar igual? (s/n)")
             if input("> ").strip().lower() != "s":
                 continue
@@ -1471,6 +1495,9 @@ def torneo_largo(modelo):
             J.mostrar_plantel(mio, next(e for e in equipos if e.nombre == mio).plantel)
         elif opcion == "9":
             mostrar_historial(p)
+        elif opcion == "12" and mio:
+            menu_club(p)
+            guardar_partida(p)
         elif opcion == "11" and mio and not p["sin_dt"]:
             menu_dt(p)
             guardar_partida(p)
@@ -1570,8 +1597,9 @@ def promesas_pendientes(p):
     t, clave = mi_dt(p), ventana_actual(p)
     if t is None or clave is None:
         return []
+    mi = next(e for e in p["equipos"] if e.nombre == p["mio"])
     return [pr for pr in t.promesas
-            if pr["ventana"] == clave and not T.cumple(pr, p["fichajes_ventana"])]
+            if pr["ventana"] == clave and not T.cumple(pr, p["fichajes_ventana"], mi.staff)]
 
 
 def pedido_de_mercado(p, clave):
@@ -1648,8 +1676,8 @@ def tras_fecha_dt(p, marcadores, cierra):
     mi, pos, nivel, ventana = pedido_de_refuerzo(p)
     # promesas de la ventana que acaba de cerrar
     if cierra:
-        for pos_p, ok in T.revisar_promesas(t, cierra, p["fichajes_ventana"]):
-            proponer(p, T.reunion_promesa(t, rng, pos_p, ok), "promesa")
+        for promesa, ok in T.revisar_promesas(t, cierra, p["fichajes_ventana"], mi.staff):
+            proponer(p, T.reunion_promesa(t, rng, promesa, ok), "promesa")
     if t.satisfaccion < T.RENUNCIA:
         proponer(p, T.reunion_renuncia(t, rng), "renuncia")
         return
@@ -1681,13 +1709,19 @@ def tras_fecha_dt(p, marcadores, cierra):
         no_usa = [j for j in mi.plantel if jugadas >= 10 and j.partidos <= 0.2 * jugadas
                   and j.edad > 21 and M.sueldo(j) >= sueldos[len(sueldos) // 2]
                   and f"no_usa:{j.completo}|{p['temporada']}" not in t.avisos]
+        sin_staff = [r for r in C.ROLES if mi.staff.get(r, {}).get("nivel", 0) <= 1
+                     and not any(pr.get("rol") == r for pr in t.promesas)] if mi.instalaciones else []
         opciones = ((["juvenil"] if juveniles else []) + ([] if prometido else ["refuerzo"])
-                    + (["vence"] if vencen else []) + (["no_usa"] if no_usa else []))
+                    + (["vence"] if vencen else []) + (["no_usa"] if no_usa else [])
+                    + (["staff"] if sin_staff else []))
         # si no hay nada puntual, a veces pasa a charlar y a veces no
         tema = rng.choice(opciones) if opciones and rng.random() < 0.7 else "general"
         if tema == "general" and rng.random() < 0.5:
             return
-        if tema == "vence":
+        if tema == "staff":
+            rol = rng.choice(sin_staff)
+            reunion = T.reunion_staff(t, rng, rol, C.ROLES[rol], ventana)
+        elif tema == "vence":
             j = max(vencen, key=J.nivel)
             t.avisos.append(f"vence:{j.completo}|{p['temporada']}")
             reunion = T.reunion_vence(t, rng, j)
@@ -1802,6 +1836,160 @@ def mostrar_noticias(p):
         print(textwrap.fill(texto, ANCHO, subsequent_indent="   "))
 
 
+# ---------------------------------------------------------------- instalaciones
+# Predio, centro médico, estadio e inferiores, y el cuerpo técnico (ver club.py).
+def iniciar_club(p):
+    if "esperado_global" not in p:
+        calcular_esperado(p)
+    rng = random.Random(f"{p['semilla']}|club")
+    C.iniciar(p["equipos"], p["esperado_global"], rng)
+    renovar_staff_libres(p)
+
+
+def renovar_staff_libres(p):
+    rng = random.Random(f"{p['semilla']}|{p['temporada']}|staff")
+    p["staff_libres"] = C.candidatos(rng, set())
+
+
+def barra5(n):
+    return "█" * n + "░" * (C.NIVEL_MAX - n)
+
+
+def estrellas(n):
+    return "★" * n + "☆" * (C.NIVEL_MAX - n)
+
+
+EFECTO_INSTALACION = {"predio": "los jugadores mejoran más rápido",
+                      "medico": "menos lesiones y más cortas",
+                      "estadio": "un 10% más de ingresos",
+                      "inferiores": "mejores juveniles"}
+
+
+def mostrar_club(mi):
+    print(f"\n=== {mi.nombre}: CLUB ===")
+    print(f"Caja: {M.plata(mi.caja)}")
+    print("\nINSTALACIONES")
+    for i, (tipo, nombre) in enumerate(C.INSTALACIONES.items(), 1):
+        n = mi.instalaciones[tipo]
+        obra = next((o for o in mi.obras if o[0] == tipo), None)
+        print(f"{i}) {nombre:<14}{barra5(n)} {n}")
+        if obra:
+            print(f"   en obra → {n + 1}, faltan {obra[1]} fechas")
+        elif n < C.NIVEL_MAX:
+            print(f"   → {n + 1}: {M.plata(C.costo_obra(tipo, n + 1))}, "
+                  f"{C.duracion_obra(n + 1)} fechas")
+        else:
+            print("   nivel máximo")
+    print(f"Mantenimiento: {M.plata(C.mantenimiento(mi))}/año")
+    print("\nCUERPO TÉCNICO")
+    for i, (rol, nombre) in enumerate(C.ROLES.items(), 1):
+        m = mi.staff.get(rol)
+        print(f"{i}) {nombre}")
+        print(f"   {m['nombre']} {estrellas(m['nivel'])} {M.plata(m['sueldo'])}/año"
+              if m else "   (no hay)")
+
+
+def menu_club(p):
+    mi = next(e for e in p["equipos"] if e.nombre == p["mio"])
+    while True:
+        mostrar_club(mi)
+        print("\n1) Mejorar instalación  2) Contratar")
+        print("3) Despedir  4) Volver")
+        opcion = input("> ").strip()
+        if opcion == "1":
+            mejorar_instalacion(mi)
+        elif opcion == "2":
+            contratar_staff(p, mi)
+        elif opcion == "3":
+            despedir_staff(mi)
+        elif opcion == "4":
+            return
+        else:
+            print("Elegí del 1 al 4.")
+
+
+def mejorar_instalacion(mi):
+    tipos = list(C.INSTALACIONES)
+    print()
+    for i, tipo in enumerate(tipos, 1):
+        print(f"{i}) {C.INSTALACIONES[tipo]}: {EFECTO_INSTALACION[tipo]}")
+    k = elegir_de_lista(len(tipos), "¿Cuál? (Enter = volver) ")
+    if k is None:
+        return
+    tipo = tipos[k]
+    n = mi.instalaciones[tipo] + 1
+    if n > C.NIVEL_MAX:
+        print("Ya está al máximo.")
+        return
+    if any(o[0] == tipo for o in mi.obras):
+        print("Ya hay una obra en marcha.")
+        return
+    costo = C.costo_obra(tipo, n)
+    if costo > mi.caja:
+        print(f"No te alcanza: cuesta {M.plata(costo)} y tenés {M.plata(mi.caja)}.")
+        return
+    extra = C.mantenimiento(mi)
+    print(f"{C.INSTALACIONES[tipo]} a nivel {n}: {M.plata(costo)}, "
+          f"{C.duracion_obra(n)} fechas de obra.")
+    mi.instalaciones[tipo] += 1
+    extra = C.mantenimiento(mi) - extra
+    mi.instalaciones[tipo] -= 1
+    print(f"El mantenimiento sube {M.plata(extra)}/año. ¿Arrancamos? (s/n)")
+    if input("> ").strip().lower() == "s":
+        C.empezar_obra(mi, tipo)
+        print(f"🏗 Arrancó la obra. Termina en {C.duracion_obra(n)} fechas.")
+
+
+def elegir_rol(texto):
+    roles = list(C.ROLES)
+    print()
+    for i, rol in enumerate(roles, 1):
+        print(f"{i}) {C.ROLES[rol]}")
+    k = elegir_de_lista(len(roles), texto)
+    return None if k is None else roles[k]
+
+
+def contratar_staff(p, mi):
+    rol = elegir_rol("¿Qué buscás? (Enter = volver) ")
+    if rol is None:
+        return
+    lista = p["staff_libres"][rol]
+    if not lista:
+        print("No hay nadie disponible hasta la próxima temporada.")
+        return
+    actual = mi.staff.get(rol)
+    if actual:
+        print(textwrap.fill(f"Hoy: {actual['nombre']} {estrellas(actual['nivel'])}. Si "
+                            f"contratás a otro, se va (cuesta "
+                            f"{M.plata(actual['sueldo'] / 2)}).", ANCHO))
+    print()
+    for i, m in enumerate(lista, 1):
+        print(f"{i}) {m['nombre']} {estrellas(m['nivel'])} {M.plata(m['sueldo'])}/año")
+    k = elegir_de_lista(len(lista), "¿A quién contratás? (Enter = volver) ")
+    if k is None:
+        return
+    nuevo = lista.pop(k)
+    if actual:
+        mi.caja -= actual["sueldo"] / 2
+    mi.staff[rol] = nuevo
+    print(f"✅ {nuevo['nombre']} es el nuevo {C.ROLES[rol].lower()}.")
+
+
+def despedir_staff(mi):
+    rol = elegir_rol("¿A quién despedís? (Enter = volver) ")
+    if rol is None:
+        return
+    m = mi.staff.get(rol)
+    if not m:
+        print("No hay nadie en ese puesto.")
+        return
+    print(f"Despedir a {m['nombre']} cuesta {M.plata(m['sueldo'] / 2)}. ¿Seguro? (s/n)")
+    if input("> ").strip().lower() == "s":
+        mi.caja -= m["sueldo"] / 2
+        del mi.staff[rol]
+        print(f"{m['nombre']} ya no trabaja en el club.")
+
+
 # ---------------------------------------------------------------- mercado de pases
 def ventana_actual(p):
     """Clave de la ventana de pases abierta ahora, o None si está cerrado.
@@ -1828,6 +2016,12 @@ def abrir_ventana(p):
     p["movimientos"] = (p.pop("fin_contratos", [])
                         + M.movimientos_ia(equipos, p["mio"], p["libres"], rng,
                                            usados=usados))
+    if "staff_libres" in p:
+        for e in equipos:
+            if e.nombre != p["mio"]:
+                noticia = C.invertir_ia(e, rng)
+                if noticia:
+                    p["movimientos"].append(noticia)
     p["ofertas"] = M.ofertas_por_mios(equipos, p["mio"], rng) if p["mio"] else []
     p["sondeos"] = {}
     pedido_de_mercado(p, clave)
@@ -1910,8 +2104,10 @@ def menu_mercado(p):
         print("\n=== MERCADO DE PASES ===")
         print("Cierra cuando juegues la próxima fecha.")
         for pr in promesas_pendientes(p):
-            print(textwrap.fill(f"📌 Le prometiste al DT: {T.puesto(pr['pos'])}, "
-                                f"nivel {pr['nivel']} o más", ANCHO, subsequent_indent="   "))
+            if "pos" in pr:
+                print(textwrap.fill(f"📌 Le prometiste al DT: {T.puesto(pr['pos'])}, "
+                                    f"nivel {pr['nivel']} o más", ANCHO,
+                                    subsequent_indent="   "))
         print(f"Caja: {M.plata(mi.caja)} · Plantel: {len(mi.plantel)}")
         print(f"Ingresos: {M.plata(mi.ingreso)}/año")
         print(f"Sueldos: {M.plata(M.masa_salarial(mi.plantel))}/año")
@@ -2259,7 +2455,7 @@ def ver_plantel(modelo):
 
 def main():
     global PLANTELES
-    print("SIMULADOR DE FÚTBOL — 1.4")
+    print("SIMULADOR DE FÚTBOL — 1.5")
     ruta = sys.argv[1] if len(sys.argv) > 1 else "modelo_poisson.json"
     modelo = cargar_modelo(ruta)
     cargar_ascenso(modelo)
