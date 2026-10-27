@@ -1054,8 +1054,9 @@ def pedir_entrenamiento():
 def mostrar_entrenamiento(club, plan, mejoras, lesionados, del_dt):
     tipo, intensidad = plan
     quien = "elegido por el DT" if del_dt else "elegido por vos"
-    print(f"\n🏋 Entrenamiento de {club}: {tipo}"
-          + (f" ({intensidad})" if tipo != "descanso" else "") + f", {quien}")
+    texto = (f"🏋 Entrenamiento de {club}: {tipo}"
+             + (f" ({intensidad})" if tipo != "descanso" else "") + f", {quien}.")
+    print("\n" + textwrap.fill(texto, ANCHO, subsequent_indent="  "))
     if mejoras:
         texto = "Suben: " + ", ".join(f"{j.corto} {a}→{b}" for j, a, b in mejoras)
         print(textwrap.fill(texto, ANCHO, subsequent_indent="  "))
@@ -1419,6 +1420,14 @@ def torneo_largo(modelo):
             if not p["sin_dt"]:
                 print("11) Mi DT")
         opcion = input("> ").strip()
+        if opcion in ("1", "2", "3") and mio and promesas_pendientes(p):
+            for pr in promesas_pendientes(p):
+                print(textwrap.fill(f"⚠ Le prometiste al DT un {T.puesto(pr['pos'])} "
+                                    f"(nivel {pr['nivel']} o más) y el mercado cierra con "
+                                    f"esta fecha.", ANCHO))
+            print("¿Jugar igual? (s/n)")
+            if input("> ").strip().lower() != "s":
+                continue
         if opcion == "1":
             resultados = jugar_fecha(con_relato=True)
             input("\nEnter para ver los resultados de la fecha...")
@@ -1554,6 +1563,15 @@ def pedido_de_refuerzo(p, abierta=None):
     pos, actual = M.necesidad(mi)
     ventana = T.proxima_ventana(p["temporada"], p["numero"], len(p["fixture"]), abierta)
     return mi, pos, round(actual), ventana
+
+
+def promesas_pendientes(p):
+    """Lo que le prometiste al DT para la ventana abierta y todavía no llegó."""
+    t, clave = mi_dt(p), ventana_actual(p)
+    if t is None or clave is None:
+        return []
+    return [pr for pr in t.promesas
+            if pr["ventana"] == clave and not T.cumple(pr, p["fichajes_ventana"])]
 
 
 def pedido_de_mercado(p, clave):
@@ -1890,6 +1908,10 @@ def menu_mercado(p):
     rng = random.Random(f"{p['semilla']}|{p['ventana']}|sondeos")
     while True:
         print("\n=== MERCADO DE PASES ===")
+        print("Cierra cuando juegues la próxima fecha.")
+        for pr in promesas_pendientes(p):
+            print(textwrap.fill(f"📌 Le prometiste al DT: {T.puesto(pr['pos'])}, "
+                                f"nivel {pr['nivel']} o más", ANCHO, subsequent_indent="   "))
         print(f"Caja: {M.plata(mi.caja)} · Plantel: {len(mi.plantel)}")
         print(f"Ingresos: {M.plata(mi.ingreso)}/año")
         print(f"Sueldos: {M.plata(M.masa_salarial(mi.plantel))}/año")
@@ -1968,7 +1990,7 @@ def comprar(p, mi):
         print("Se cayó el pase.")
         return
     M.transferir(j, vendedor, mi, monto, sueldo, anios)
-    p["fichajes_ventana"].append([j.pos, J.nivel(j)])
+    p["fichajes_ventana"].append([j.pos, j.pos2, J.nivel(j)])
     p["movimientos"].append(f"{j.corto} ({j.pos}, {J.nivel(j)}): {vendedor.nombre} → "
                             f"{mi.nombre}, {M.plata(monto)}")
     print(f"✅ ¡{j.completo} es nuevo jugador de {mi.nombre}! ({M.plata(monto)})")
@@ -1997,7 +2019,7 @@ def fichar_libres(p, mi):
     if sueldo is None:
         return
     M.fichar_libre(j, mi, p["libres"], sueldo, anios)
-    p["fichajes_ventana"].append([j.pos, J.nivel(j)])
+    p["fichajes_ventana"].append([j.pos, j.pos2, J.nivel(j)])
     p["movimientos"].append(f"{j.corto} ({j.pos}, {J.nivel(j)}): libre → {mi.nombre}")
     print(f"✅ Firmó {j.completo}.")
 
