@@ -196,6 +196,11 @@ FRASES = {
         "Le soy sincero: {jugador} no entra en mis planes. Busquémosle club.",
         "{jugador} jugó {n} partidos. Con esa plata podemos traer a otro.",
     ),
+    "staff": (
+        "Presidente, necesito un {rol}. Así no puedo trabajar.",
+        "Me falta un {rol} de nivel. Con eso el grupo rinde más, se lo aseguro.",
+        "Le pido un {rol}. Es una inversión, no un gasto.",
+    ),
     "renuncia": (
         "Presidente, vengo a presentar mi renuncia. No hay más nada que hablar.",
         "Me voy. Le agradezco, pero así no puedo seguir.",
@@ -301,6 +306,16 @@ def reunion_no_usa(t, rng, jugador, partidos):
             ]}
 
 
+def reunion_staff(t, rng, rol, nombre_rol, ventana):
+    return {"tema": "staff", "texto": _f(rng, FRASES["staff"], rol=nombre_rol.lower()),
+            "opciones": [
+                ("Lo contrato", (4, 1, 0), {"rol": rol, "nivel": 2, "ventana": ventana,
+                                            "nombre": nombre_rol}, _resp(rng, "contento")),
+                ("No hay plata para eso", (-3, 0, 0), None, _resp(rng, "neutro")),
+                ("No hace falta", (-6, 0, 0), None, _resp(rng, "enojado")),
+            ]}
+
+
 def reunion_ultimatum(t, rng, pos, nivel, ventana):
     return {"tema": "ultimatum", "texto": _f(rng, FRASES["ultimatum"]), "opciones": [
         ("Quedate, te traigo refuerzos", (10, 0, -3),
@@ -320,13 +335,18 @@ def reunion_general(t, rng):
             ]}
 
 
-def reunion_promesa(t, rng, pos, cumplida):
+def que_prometio(promesa):
+    return promesa["nombre"].lower() if "rol" in promesa else puesto(promesa["pos"])
+
+
+def reunion_promesa(t, rng, promesa, cumplida):
     if cumplida:
         cambiar(t, sat=15, conf=4)
         return {"tema": "promesa", "texto": _f(rng, FRASES["promesa_cumplida"],
-                                                pos=puesto(pos)), "opciones": []}
+                                                pos=que_prometio(promesa)), "opciones": []}
     cambiar(t, sat=-20, conf=-3)
-    return {"tema": "promesa", "texto": _f(rng, FRASES["promesa_rota"], pos=puesto(pos)),
+    return {"tema": "promesa", "texto": _f(rng, FRASES["promesa_rota"],
+                                           pos=que_prometio(promesa)),
             "opciones": [
                 ("Tenés razón, perdón", (4, 0, 0), None, _resp(rng, "neutro")),
                 ("No se pudo, hay que bancarse", (-3, 0, 0), None, _resp(rng, "enojado")),
@@ -351,13 +371,13 @@ def aplicar(t, opcion):
     """Aplica la respuesta elegida. Devuelve (promesa o None, respuesta del DT)."""
     _, (sat, conf, pres), promesa, respuesta = opcion
     cambiar(t, sat, conf, pres)
-    if promesa and "pos" in promesa:
+    if promesa and ("pos" in promesa or "rol" in promesa):
         t.promesas.append(promesa)
         promesa = None
     return promesa, respuesta
 
 
-def revisar_promesas(t, ventana, fichajes):
+def revisar_promesas(t, ventana, fichajes, staff=None):
     """Al cerrar una ventana: qué promesas se cumplieron.
     fichajes: [(posición, posición secundaria, nivel)] de los que llegaron en
     esa ventana. Cuenta también si el puesto es la posición secundaria.
@@ -367,13 +387,17 @@ def revisar_promesas(t, ventana, fichajes):
         if pr["ventana"] != ventana:
             quedan.append(pr)
             continue
-        ok = cumple(pr, fichajes)
-        resultado.append((pr["pos"], ok))
+        ok = cumple(pr, fichajes, staff)
+        resultado.append((pr, ok))
     t.promesas = quedan
     return resultado
 
 
-def cumple(promesa, fichajes):
+def cumple(promesa, fichajes, staff=None):
+    """Una promesa de refuerzo se cumple si llegó alguien para ese puesto con
+    el nivel prometido; una de cuerpo técnico, si hay alguien de ese nivel."""
+    if "rol" in promesa:
+        return (staff or {}).get(promesa["rol"], {}).get("nivel", 0) >= promesa["nivel"]
     for f in fichajes:
         pos, pos2, nivel = f if len(f) == 3 else (f[0], None, f[1])
         if promesa["pos"] in (pos, pos2) and nivel >= promesa["nivel"]:
@@ -395,8 +419,8 @@ def mostrar(t, club):
     print(f"Confianza    {barra(t.confianza)} {t.confianza:.0f}")
     print(f"Presión      {barra(t.presion)} {t.presion:.0f}")
     for pr in t.promesas:
-        print(f"Le prometiste: {puesto(pr['pos'])}, nivel {pr['nivel']} o más "
-              f"(ventana {pr['ventana']})")
+        nivel = f"{pr['nivel']} estrellas" if "rol" in pr else f"nivel {pr['nivel']}"
+        print(f"Le prometiste: {que_prometio(pr)}, {nivel} o más (ventana {pr['ventana']})")
 
 
 def a_dict(t):

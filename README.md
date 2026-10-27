@@ -146,6 +146,22 @@ no se borra cuando se baja una versión nueva.
   figuras piden el doble, y los que tienen la caja llena traen refuerzos
   del exterior.
 
+### Instalaciones y cuerpo técnico (opción 12)
+
+- **Instalaciones**, de nivel 1 a 5: predio (los jugadores mejoran más
+  rápido), centro médico (menos lesiones y más cortas), estadio (10% más
+  de ingresos por nivel) e inferiores (mejores juveniles). Mejorar cuesta
+  plata, la obra tarda unas fechas y cada nivel tiene mantenimiento.
+- **Cuerpo técnico**, de 1 a 5 estrellas: preparador físico (resistencia y
+  recuperación), ayudantes de ataque y de defensa, entrenador de arqueros
+  y coordinador de inferiores. Cobran sueldo y se contratan de una lista
+  que se renueva cada temporada.
+- Un club promedio (nivel 2,5) entrena igual que antes; la diferencia la
+  hace quién invierte más. Cada club arranca según su tamaño, y los de la
+  computadora invierten cuando les sobra plata.
+- El DT te puede pedir cuerpo técnico en las reuniones, y la promesa se
+  revisa como la de un refuerzo.
+
 ### Contratos
 
 - Cada jugador tiene un contrato de 1 a 4 temporadas (los jóvenes firman
@@ -172,6 +188,7 @@ no se borra cuando se baja una versión nueva.
 | `jugadores.py` | Jugadores, posiciones, formaciones, planteles, entrenamiento y temporadas. |
 | `mercado.py` | Valores, sueldos, finanzas de los clubes y mercado de pases. |
 | `tecnicos.py` | Los DT como personas: ánimo, reuniones, promesas y despidos. |
+| `club.py` | Instalaciones, obras y cuerpo técnico de los clubes. |
 | `modelo_poisson.json` | El modelo de goles entrenado con la liga argentina. |
 | `dt_ia.json` | Lo que aprendieron los DT. |
 | `planteles.json` | Los planteles de los 64 clubes. |

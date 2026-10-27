@@ -29,16 +29,17 @@ plata, compras, ventas y si sigue o no en el cargo son tuyas.
   los clubes grandes; el DT avisa de contratos y de los que no usa.
 - **1.4**: ascenso: Primera Nacional con 32 clubes reales, en paralelo
   con la Liga Profesional; bajan 2 y suben 2.
+- **1.5**: instalaciones (predio, centro médico, estadio, inferiores) y
+  cuerpo técnico (preparador físico, ayudantes, arqueros, inferiores).
 
 ## Próximo
 
 Orden sugerido:
 
-1. **Instalaciones y cuerpo técnico** (punto 6, primera parte).
-2. **Reserva y juveniles** (punto 6, segunda parte).
-3. **Fundar un club** (punto 5): queda para más adelante.
-4. **Que el DT hable con IA** (punto 3), opcional.
-5. Lo que falta del ascenso (punto 4), si hace falta.
+1. **Reserva y juveniles** (punto 6, segunda parte).
+2. **Fundar un club** (punto 5): queda para más adelante.
+3. **Que el DT hable con IA** (punto 3), opcional.
+4. Lo que falta del ascenso (punto 4), si hace falta.
 
 Lo que falta del DT (punto 2) y las ideas del final se pueden ir metiendo
 en el medio.
@@ -117,7 +118,7 @@ Los efectos se calibran para que un club promedio quede como ahora: lo
 que ya está ajustado (goles, empates, nivel de la liga) no cambia, y la
 diferencia la marca quién invierte más.
 
-**Primera parte: instalaciones y cuerpo técnico**
+**Primera parte: instalaciones y cuerpo técnico** (hecho, 1.5)
 
 - **Instalaciones**, cada una de nivel 1 a 5. Mejorar cuesta plata, la
   obra tarda unas fechas y cada nivel tiene un mantenimiento por año:
