@@ -56,6 +56,11 @@ class Tecnico:
         return round((0.05 + 0.006 * self.prestigio) * self.aumento, 3)
 
 
+def puesto(pos):
+    """El nombre del puesto con su código, para buscarlo en el mercado."""
+    return f"{J.NOMBRE_POS[pos]} ({pos})"
+
+
 def _clip(v):
     return max(0.0, min(100.0, v))
 
@@ -228,7 +233,7 @@ def proxima_ventana(temporada, numero, total, abierta):
 
 
 def reunion_refuerzo(t, rng, pos, nivel, caja, costo, ventana, ventana_abierta):
-    texto = _f(rng, FRASES["refuerzo"], pos=J.NOMBRE_POS[pos])
+    texto = _f(rng, FRASES["refuerzo"], pos=puesto(pos))
     promesa = {"pos": pos, "nivel": nivel + 3, "ventana": ventana}
     cuando = "en este mercado" if ventana_abierta else "en el próximo mercado"
     no_hay = (-4, 0, 0) if caja < costo else (-10, 0, 0)
@@ -248,7 +253,7 @@ def reunion_racha(t, rng, n, mala, pos, nivel, ventana):
                     ("Te banco, seguimos con vos", (6, 2, -6), None, _resp(rng, "contento")),
                     ("¿Qué necesitás?", (3, 0, 0),
                      {"pos": pos, "nivel": nivel + 3, "ventana": ventana},
-                     f"Un {J.NOMBRE_POS[pos]}, presidente. Con eso cambiamos."),
+                     f"Un {puesto(pos)}, presidente. Con eso cambiamos."),
                     ("Si no ganás el próximo, te vas", (-12, -2, 12), None,
                      _resp(rng, "enojado")),
                 ]}
@@ -319,9 +324,9 @@ def reunion_promesa(t, rng, pos, cumplida):
     if cumplida:
         cambiar(t, sat=15, conf=4)
         return {"tema": "promesa", "texto": _f(rng, FRASES["promesa_cumplida"],
-                                                pos=J.NOMBRE_POS[pos]), "opciones": []}
+                                                pos=puesto(pos)), "opciones": []}
     cambiar(t, sat=-20, conf=-3)
-    return {"tema": "promesa", "texto": _f(rng, FRASES["promesa_rota"], pos=J.NOMBRE_POS[pos]),
+    return {"tema": "promesa", "texto": _f(rng, FRASES["promesa_rota"], pos=puesto(pos)),
             "opciones": [
                 ("Tenés razón, perdón", (4, 0, 0), None, _resp(rng, "neutro")),
                 ("No se pudo, hay que bancarse", (-3, 0, 0), None, _resp(rng, "enojado")),
@@ -354,17 +359,26 @@ def aplicar(t, opcion):
 
 def revisar_promesas(t, ventana, fichajes):
     """Al cerrar una ventana: qué promesas se cumplieron.
-    fichajes: [(posición, nivel)] de los que llegaron en esa ventana.
+    fichajes: [(posición, posición secundaria, nivel)] de los que llegaron en
+    esa ventana. Cuenta también si el puesto es la posición secundaria.
     Devuelve [(posición, cumplida)]."""
     resultado, quedan = [], []
     for pr in t.promesas:
         if pr["ventana"] != ventana:
             quedan.append(pr)
             continue
-        ok = any(pos == pr["pos"] and nivel >= pr["nivel"] for pos, nivel in fichajes)
+        ok = cumple(pr, fichajes)
         resultado.append((pr["pos"], ok))
     t.promesas = quedan
     return resultado
+
+
+def cumple(promesa, fichajes):
+    for f in fichajes:
+        pos, pos2, nivel = f if len(f) == 3 else (f[0], None, f[1])
+        if promesa["pos"] in (pos, pos2) and nivel >= promesa["nivel"]:
+            return True
+    return False
 
 
 def barra(v, ancho=10):
@@ -381,7 +395,8 @@ def mostrar(t, club):
     print(f"Confianza    {barra(t.confianza)} {t.confianza:.0f}")
     print(f"Presión      {barra(t.presion)} {t.presion:.0f}")
     for pr in t.promesas:
-        print(f"Le prometiste: {J.NOMBRE_POS[pr['pos']]} (ventana {pr['ventana']})")
+        print(f"Le prometiste: {puesto(pr['pos'])}, nivel {pr['nivel']} o más "
+              f"(ventana {pr['ventana']})")
 
 
 def a_dict(t):
