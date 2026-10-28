@@ -224,6 +224,7 @@ class Jugador:
     contrato: int = 0       # temporadas de contrato que le quedan (0 = libre o vencido)
     sueldo: float = 0.0     # sueldo anual pactado, millones de dólares (0 = sin pactar)
     partidos: int = 0       # partidos jugados en la temporada
+    pot_est: int = 0        # potencial que estima el club (los pibes de la reserva)
 
     @property
     def completo(self):
@@ -401,10 +402,12 @@ EDAD_RETIRO = 34          # los arqueros duran 2 años más
 EDAD_RETIRO_SEGURO = 40
 
 
-def pasar_temporada(plantel, ataque, defensa, rng, usados, cantera=0.0):
+def pasar_temporada(plantel, ataque, defensa, rng, usados, cantera=0.0, reponer=True):
     """Envejece el plantel. ataque y defensa: la fuerza del club en el modelo,
     que define el nivel de los juveniles; cantera: cuánto mejores salen por
-    las inferiores del club (0 = como siempre). Devuelve (retirados, juveniles)."""
+    las inferiores del club (0 = como siempre). Con reponer=False no sube un
+    juvenil por cada retirado (cuando el club tiene reserva, ver club.py).
+    Devuelve (retirados, juveniles)."""
     meta_of, meta_de = metas(ataque, defensa)
     retirados, juveniles = [], []
     for j in list(plantel):
@@ -423,7 +426,7 @@ def pasar_temporada(plantel, ataque, defensa, rng, usados, cantera=0.0):
             plantel.remove(j)
             retirados.append(j)
     apellidos_club = {j.apellido for j in plantel}
-    for viejo in retirados:
+    for viejo in (retirados if reponer else []):
         nuevo = generar_jugador(viejo.pos, rng.randint(17, 21), meta_of, meta_de,
                                 rng.gauss(-6 + cantera, 4), rng, usados, apellidos_club)
         _redondear(nuevo)
@@ -516,7 +519,7 @@ def _a_dict(j):
     d = asdict(j)
     d.pop("fisico")
     d.pop("energia")
-    for campo in ("lesion", "contrato", "sueldo", "partidos"):
+    for campo in ("lesion", "contrato", "sueldo", "partidos", "pot_est"):
         d.pop(campo)
     return d
 

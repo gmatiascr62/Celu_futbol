@@ -155,8 +155,8 @@ no se borra cuando se baja una versión nueva.
   cansa y puede traer lesiones de 1 a 4 fechas. El de tu club lo elegís vos
   o lo decide el DT.
 - **Temporadas**: al terminar el torneo, todos cumplen un año. Desde los 31
-  empiezan a bajar, desde los 34 se pueden retirar, y por cada retirado sube
-  un juvenil de la cantera. Hay un historial de campeones.
+  empiezan a bajar y desde los 34 se pueden retirar; el plantel se renueva
+  con los pibes de la reserva. Hay un historial de campeones.
 - **Partida guardada**: `partida.json`, después de cada fecha.
 
 ### Mercado de pases
@@ -193,6 +193,23 @@ no se borra cuando se baja una versión nueva.
   computadora invierten cuando les sobra plata.
 - El DT te puede pedir cuerpo técnico en las reuniones, y la promesa se
   revisa como la de un refuerzo.
+
+### Reserva (opción 13)
+
+- Los pibes de 16 a 20 años de las inferiores, aparte del plantel. Cada
+  pretemporada llegan 2 a 4 nuevos (más con mejores inferiores) y
+  entrenan en la reserva sin jugar.
+- Su potencial no se ve exacto: el club lo estima en estrellas (★★★☆☆),
+  y cuanto mejor el coordinador de inferiores, menos se equivoca. Uno de
+  cada diez tiene potencial de crack.
+- Los subís a Primera cuando quieras (firman 3 años), los dejás ir, o los
+  ofrecés afuera en las ventanas de pases: un pibe con potencial vale
+  mucho. También llegan ofertas del exterior por los mejores.
+- Al cumplir 21 hay que decidir: suben o se van. El DT te avisa cuando uno
+  está para jugar.
+- Ya no sube un juvenil automático por cada retirado: el plantel se
+  renueva con la reserva. Los clubes de la computadora suben a los
+  mejores hasta tener 24.
 
 ### Contratos
 

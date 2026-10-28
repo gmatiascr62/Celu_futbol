@@ -176,3 +176,102 @@ def invertir_ia(e, rng):
     if nivel <= NIVEL_MAX and sueldo_staff(nivel) <= 0.05 * e.ingreso:
         e.staff[rol] = nuevo_staff(rng, rol, nivel, set())
     return None
+
+
+# ---------------------------------------------------------------- reserva
+# Los pibes de 16 a 20 años que todavía no están en el plantel. Cada
+# pretemporada llegan nuevos (más con mejores inferiores), entrenan en la
+# reserva sin jugar, y antes de cumplir 21 hay que subirlos o dejarlos ir.
+# Su potencial no se ve exacto: el club lo estima en estrellas, y cuanto
+# mejor el coordinador de inferiores, menos se equivoca.
+RESERVA_MAX = 12
+EDAD_LIMITE = 21
+PIBES_AL_ARRANCAR = 5
+PLANTEL_IDEAL = 24          # la computadora sube pibes hasta tener esto
+
+
+def cuantos_llegan(e):
+    return 2 + e.instalaciones.get("inferiores", 2) // 2
+
+
+def estimar(j, e, rng):
+    """El potencial que ve el club, con un error que achica el coordinador."""
+    coord = e.staff.get("inferiores", {}).get("nivel", 0)
+    j.pot_est = int(round(j.potencial + rng.gauss(0, max(1.0, 7 - 1.2 * coord))))
+
+
+def estrellas_pot(j):
+    pe = j.pot_est or j.potencial
+    n = 1 if pe < 60 else 2 if pe < 68 else 3 if pe < 76 else 4 if pe < 84 else 5
+    return "★" * n + "☆" * (NIVEL_MAX - n)
+
+
+def nuevo_pibe(e, edad, rng, usados):
+    """Un pibe de las inferiores: bastante más flojo que el plantel, con un
+    potencial que puede ser cualquier cosa (alguno sale crack)."""
+    meta_of, meta_de = J.metas(e.ataque, e.defensa)
+    pos = rng.choices(list(J.COMPOSICION), weights=list(J.COMPOSICION.values()))[0]
+    bonus = cantera(e) if e.instalaciones else 0.0
+    j = J.generar_jugador(pos, edad, meta_of, meta_de,
+                          rng.gauss(-14 + 0.5 * bonus + 2 * (edad - 16), 4), rng, usados,
+                          {x.apellido for x in e.plantel + e.reserva})
+    J._redondear(j)
+    crack = rng.randint(5, 15) if rng.random() < 0.10 else 0   # uno de cada diez
+    j.potencial = min(99, J._potencial(j, rng) + crack + max(0, round(0.6 * bonus)))
+    estimar(j, e, rng)
+    return j
+
+
+def iniciar_reserva(equipos, rng, usados):
+    for e in equipos:
+        if not e.reserva:
+            e.reserva = [nuevo_pibe(e, rng.randint(16, 20), rng, usados)
+                         for _ in range(PIBES_AL_ARRANCAR)]
+
+
+def llegan_pibes(e, rng, usados):
+    """Pretemporada: llegan los pibes nuevos de las inferiores."""
+    nuevos = []
+    for _ in range(cuantos_llegan(e)):
+        if len(e.reserva) >= RESERVA_MAX:
+            break
+        j = nuevo_pibe(e, rng.randint(16, 17), rng, usados)
+        e.reserva.append(j)
+        nuevos.append(j)
+    return nuevos
+
+
+def pasar_anio_reserva(e, rng):
+    """Cumplen un año y el club vuelve a estimar su potencial."""
+    for j in e.reserva:
+        j.edad += 1
+        j.fisico, j.lesion = 1.0, 0
+        estimar(j, e, rng)
+
+
+def subir(e, j):
+    """El pibe pasa al plantel con su primer contrato."""
+    import mercado as M
+    e.reserva.remove(j)
+    e.plantel.append(j)
+    M.firmar(j, anios=3)
+
+
+def reserva_ia(e):
+    """Pretemporada en un club de la computadora: sube a los mejores pibes
+    hasta tener el plantel completo, y a los que cumplen 21 los sube si sirven
+    o los deja ir."""
+    while len(e.plantel) < PLANTEL_IDEAL and e.reserva:
+        subir(e, max(e.reserva, key=J.nivel))
+    peor = min(J.nivel(j) for j in e.plantel)
+    for j in [j for j in e.reserva if j.edad >= EDAD_LIMITE]:
+        if J.nivel(j) > peor and len(e.plantel) < 30:
+            subir(e, j)
+        else:
+            e.reserva.remove(j)
+
+
+def oferta_exterior(j, rng):
+    """Lo que ofrecen de afuera por un pibe: pagan el potencial."""
+    import mercado as M
+    return round(M.valor(j) * rng.uniform(1.5, 3.0) * (1 + max(0, j.potencial - 75) / 15), 3)

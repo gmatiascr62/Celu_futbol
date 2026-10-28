@@ -36,15 +36,16 @@ plata, compras, ventas y si sigue o no en el cargo son tuyas.
   concretos; hinchada, clásicos y medios.
 - **1.7**: tres divisiones de 20 clubes (Liga Profesional, Primera
   Nacional y Primera B), torneos de 38 fechas.
+- **1.8**: reserva de juveniles: pibes con potencial en estrellas, subirlos
+  a Primera, venderlos afuera.
 
 ## Próximo
 
 Orden sugerido:
 
-1. **Reserva y juveniles** (punto 6, segunda parte).
-2. **Fundar un club** (punto 5): queda para más adelante.
-3. **Que el DT hable con IA** (punto 3), opcional.
-4. Lo que falta del ascenso (punto 4), si hace falta.
+1. **Fundar un club** (punto 5).
+2. **Que el DT hable con IA** (punto 3), opcional.
+3. Lo que falta del ascenso (punto 4), si hace falta.
 
 Las ideas del final se pueden ir metiendo en el medio.
 
@@ -138,7 +139,7 @@ diferencia la marca quién invierte más.
   - Coordinador de inferiores: desarrolla mejor a los pibes.
 - El DT puede pedirlos en las reuniones.
 
-**Segunda parte: reserva y juveniles**
+**Segunda parte: reserva y juveniles** (hecho, 1.8)
 
 - Una reserva aparte del plantel. Cada pretemporada llegan pibes de 16 a
   18 años, más y mejores según las inferiores y el coordinador.
