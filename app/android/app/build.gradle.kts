@@ -1,7 +1,19 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
     id("dev.flutter.flutter-gradle-plugin")
+}
+
+// La firma del APK sale de key.properties (la arma el workflow de GitHub
+// Actions, ver .github/workflows/apk.yml). Siempre la misma firma: así cada
+// APK nuevo se instala encima del anterior sin perder la partida. Sin
+// key.properties (en una compu cualquiera), firma con la de prueba.
+val firma = Properties()
+val archivoFirma = rootProject.file("key.properties")
+if (archivoFirma.exists()) {
+    archivoFirma.inputStream().use { firma.load(it) }
 }
 
 android {
@@ -27,14 +39,6 @@ android {
         versionCode = flutter.versionCode
         versionName = flutter.versionName
     }
-
-    // La firma del APK sale de key.properties (la arma el workflow de GitHub
-    // Actions, ver .github/workflows/apk.yml). Siempre la misma firma: así cada
-    // APK nuevo se instala encima del anterior sin perder la partida. Sin
-    // key.properties (en una compu cualquiera), firma con la de prueba.
-    val firma = java.util.Properties()
-    val archivoFirma = rootProject.file("key.properties")
-    if (archivoFirma.exists()) archivoFirma.inputStream().use { firma.load(it) }
 
     signingConfigs {
         create("celu") {
