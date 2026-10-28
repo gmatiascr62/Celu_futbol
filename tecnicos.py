@@ -45,6 +45,9 @@ class Tecnico:
     avisos: list = field(default_factory=list)   # temas que ya planteó (no se repiten)
     aumento: float = 1.0         # sube cada vez que renueva
     ultimo_club: str = ""        # de dónde se fue (ahí no vuelve enseguida)
+    clubes: list = field(default_factory=list)   # [club, temporada desde, hasta o None]
+    logros: list = field(default_factory=list)   # títulos, ascensos y descensos
+    despidos: int = 0
 
     @property
     def completo(self):
@@ -108,11 +111,13 @@ def tras_partido(t, gf, gc):
     t.fechas += 1
 
 
-def actualizar_presion(t, puesto, esperado, ultimos, jugadas):
-    """La presión sale de la diferencia entre el puesto y lo esperado,
-    y de la racha (últimos 5 partidos)."""
+def actualizar_presion(t, puesto, esperado, ultimos, jugadas, medios=1.0, hinchada=60.0):
+    """La presión sale de la diferencia entre el puesto y lo esperado, de la
+    racha (últimos 5 partidos), de los medios (pesan más en los clubes
+    grandes) y de la hinchada si está enojada."""
     racha = ultimos[-5:].count("P") - ultimos[-5:].count("G")
-    objetivo = _clip(50 + 2.0 * (puesto - esperado) + 6 * racha)
+    objetivo = 50 + medios * (2.0 * (puesto - esperado) + 6 * racha)
+    objetivo = _clip(objetivo + max(0.0, 0.4 * (45 - hinchada)))
     peso = min(1.0, jugadas / 10)       # al principio la tabla dice poco
     objetivo = peso * objetivo + (1 - peso) * 45
     t.presion = _clip(t.presion + 0.25 * (objetivo - t.presion))
@@ -201,6 +206,19 @@ FRASES = {
         "Me falta un {rol} de nivel. Con eso el grupo rinde más, se lo aseguro.",
         "Le pido un {rol}. Es una inversión, no un gasto.",
     ),
+    "lo_quieren": (
+        "Presidente, me llamaron de {club}. Quieren que sea su técnico. Quería que lo sepa por mí.",
+        "Le voy a ser sincero: {club} me hizo una oferta. Antes de contestar, quiero escucharlo.",
+    ),
+    "entrenamiento": (
+        "Los muchachos están fundidos y los hace entrenar fuerte. Así se me van a lesionar.",
+        "Con este entrenamiento no llegamos, presidente. Déjeme manejarlo a mí.",
+        "Le pido que me deje decidir el entrenamiento. Yo los veo todos los días.",
+    ),
+    "formacion": (
+        "No juego más con el {formacion}, presidente. Perdimos {n} partidos así.",
+        "El {formacion} no nos sale. Déjeme elegir a mí o esto se complica.",
+    ),
     "renuncia": (
         "Presidente, vengo a presentar mi renuncia. No hay más nada que hablar.",
         "Me voy. Le agradezco, pero así no puedo seguir.",
@@ -237,13 +255,29 @@ def proxima_ventana(temporada, numero, total, abierta):
     return f"{temporada + 1}-0"
 
 
-def reunion_refuerzo(t, rng, pos, nivel, caja, costo, ventana, ventana_abierta):
+def reunion_refuerzo(t, rng, pos, nivel, caja, costo, ventana, ventana_abierta,
+                     candidatos=()):
+    """candidatos: [(nombre completo, línea para mostrar)], los jugadores que
+    propone el DT, el primero es el que más le gusta."""
     texto = _f(rng, FRASES["refuerzo"], pos=puesto(pos))
     promesa = {"pos": pos, "nivel": nivel + 3, "ventana": ventana}
     cuando = "en este mercado" if ventana_abierta else "en el próximo mercado"
     no_hay = (-4, 0, 0) if caja < costo else (-10, 0, 0)
     resp_no_hay = (_resp(rng, "neutro") if caja < costo
                    else "¿No hay plata? Yo veo la caja, presidente.")
+    if candidatos:
+        primero = candidatos[0][0]
+        return {"tema": "refuerzo", "texto": texto + " Le traigo nombres:",
+                "lista": [linea for _, linea in candidatos],
+                "candidatos": [nombre for nombre, _ in candidatos],
+                "opciones": [
+                    (f"Andá a buscar a {primero.split(' ', 1)[-1]}" if ventana_abierta
+                     else f"Traeme a {primero.split(' ', 1)[-1]} en el próximo mercado",
+                     (5, 2, 0), dict(promesa, jugador=primero), _resp(rng, "contento")),
+                    ("Lo voy a pensar", (0, 0, 0), None, "Bueno, le dejo la lista."),
+                    ("No hay plata", no_hay, None, resp_no_hay),
+                    ("Arreglate con lo que tenés", (-8, -3, 0), None, _resp(rng, "enojado")),
+                ]}
     return {"tema": "refuerzo", "texto": texto, "opciones": [
         (f"Te lo traigo {cuando}", (5, 2, 0), promesa, _resp(rng, "contento")),
         ("No hay plata", no_hay, None, resp_no_hay),
@@ -316,6 +350,32 @@ def reunion_staff(t, rng, rol, nombre_rol, ventana):
             ]}
 
 
+def reunion_lo_quieren(t, rng, club):
+    return {"tema": "lo_quieren", "texto": _f(rng, FRASES["lo_quieren"], club=club),
+            "opciones": [
+                ("Andá, te deseo suerte", (0, 0, 0), {"oferta": club, "acepta": True},
+                 "Gracias por todo, presidente. Este club siempre va a ser mío."),
+                ("Te subo el sueldo para que te quedes", (8, 2, 0), {"aumento": 1.25},
+                 "Me quedo, presidente. Vamos por más."),
+                ("Tenés contrato, te quedás", (-12, -2, 0), None, _resp(rng, "enojado")),
+            ]}
+
+
+def reunion_entrenamiento(t, rng):
+    return {"tema": "entrenamiento", "texto": _f(rng, FRASES["entrenamiento"]), "opciones": [
+        ("Tenés razón, decidí vos", (5, 1, 0), {"plan": None}, _resp(rng, "contento")),
+        ("Se entrena como digo yo", (-8, -1, 0), None, _resp(rng, "enojado")),
+    ]}
+
+
+def reunion_formacion(t, rng, formacion, derrotas):
+    return {"tema": "formacion", "texto": _f(rng, FRASES["formacion"], formacion=formacion,
+                                             n=derrotas), "opciones": [
+        ("Está bien, elegí vos", (5, 1, 0), {"formacion": None}, _resp(rng, "contento")),
+        ("Se juega así", (-12, -2, 0), None, _resp(rng, "enojado")),
+    ]}
+
+
 def reunion_ultimatum(t, rng, pos, nivel, ventana):
     return {"tema": "ultimatum", "texto": _f(rng, FRASES["ultimatum"]), "opciones": [
         ("Quedate, te traigo refuerzos", (10, 0, -3),
@@ -339,11 +399,13 @@ def que_prometio(promesa):
     return promesa["nombre"].lower() if "rol" in promesa else puesto(promesa["pos"])
 
 
-def reunion_promesa(t, rng, promesa, cumplida):
+def reunion_promesa(t, rng, promesa, cumplida, exacto=False):
     if cumplida:
-        cambiar(t, sat=15, conf=4)
-        return {"tema": "promesa", "texto": _f(rng, FRASES["promesa_cumplida"],
-                                                pos=que_prometio(promesa)), "opciones": []}
+        cambiar(t, sat=21 if exacto else 15, conf=4)
+        texto = _f(rng, FRASES["promesa_cumplida"], pos=que_prometio(promesa))
+        if exacto:
+            texto += f" ¡Y es {promesa['jugador']}, el que le pedí!"
+        return {"tema": "promesa", "texto": texto, "opciones": []}
     cambiar(t, sat=-20, conf=-3)
     return {"tema": "promesa", "texto": _f(rng, FRASES["promesa_rota"],
                                            pos=que_prometio(promesa)),
@@ -388,7 +450,8 @@ def revisar_promesas(t, ventana, fichajes, staff=None):
             quedan.append(pr)
             continue
         ok = cumple(pr, fichajes, staff)
-        resultado.append((pr, ok))
+        exacto = ok and any(len(f) > 3 and f[3] == pr.get("jugador") for f in fichajes)
+        resultado.append((pr, ok, exacto))
     t.promesas = quedan
     return resultado
 
@@ -399,7 +462,7 @@ def cumple(promesa, fichajes, staff=None):
     if "rol" in promesa:
         return (staff or {}).get(promesa["rol"], {}).get("nivel", 0) >= promesa["nivel"]
     for f in fichajes:
-        pos, pos2, nivel = f if len(f) == 3 else (f[0], None, f[1])
+        pos, pos2, nivel = (f[0], None, f[1]) if len(f) == 2 else (f[0], f[1], f[2])
         if promesa["pos"] in (pos, pos2) and nivel >= promesa["nivel"]:
             return True
     return False
@@ -418,6 +481,9 @@ def mostrar(t, club):
     print(f"Satisfacción {barra(t.satisfaccion)} {t.satisfaccion:.0f}")
     print(f"Confianza    {barra(t.confianza)} {t.confianza:.0f}")
     print(f"Presión      {barra(t.presion)} {t.presion:.0f}")
+    print("Historia:")
+    for linea in curriculum(t):
+        print(f"  {linea}")
     for pr in t.promesas:
         nivel = f"{pr['nivel']} estrellas" if "rol" in pr else f"nivel {pr['nivel']}"
         print(f"Le prometiste: {que_prometio(pr)}, {nivel} o más (ventana {pr['ventana']})")
@@ -429,6 +495,40 @@ def a_dict(t):
 
 def de_dict(d):
     return Tecnico(**d) if d else None
+
+
+# ---------------------------------------------------------------- historial
+def llega_a(t, club, temporada):
+    t.clubes.append([club, temporada, None])
+
+
+def se_va_de(t, temporada):
+    if t.clubes and t.clubes[-1][2] is None:
+        t.clubes[-1][2] = temporada
+
+
+def cambiar_prestigio(t, delta):
+    t.prestigio = int(max(10, min(99, round(t.prestigio + delta))))
+
+
+def curriculum(t):
+    """Líneas con su historia: logros y clubes."""
+    lineas = list(t.logros[-6:])
+    for club, desde, hasta in t.clubes[-5:]:
+        lineas.append(f"{club} (T{desde}–{'T' + str(hasta) if hasta else 'hoy'})")
+    if t.despidos:
+        lineas.append(f"Lo echaron {t.despidos} vez{'es' if t.despidos > 1 else ''}")
+    return lineas or ["Sin historia en el fútbol argentino"]
+
+
+def resumen_cv(t):
+    """Una línea para la lista de DT libres."""
+    titulos = [l for l in t.logros if l.startswith(("🏆", "⬆"))]
+    if titulos:
+        return titulos[-1]
+    if t.clubes:
+        return f"Dirigió {len(t.clubes)} club{'es' if len(t.clubes) > 1 else ''}"
+    return "Sin historia en el fútbol argentino"
 
 
 def reiniciar(t):

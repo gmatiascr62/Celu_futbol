@@ -88,6 +88,34 @@ no se borra cuando se baja una versión nueva.
 - La confianza mueve hasta un 3% los goles del equipo.
 - A los DT de los otros clubes los echan si la presión es insoportable, y
   te enterás por las noticias.
+- **Historial y prestigio**: cada DT anota sus clubes, títulos, ascensos,
+  descensos y despidos. A fin de temporada el prestigio sube o baja según
+  cómo le fue contra lo esperado. Los grandes buscan DT de prestigio, y si
+  el tuyo la rompe, un club más grande te lo puede querer llevar: lo dejás
+  ir (te pagan la rescisión), le subís el sueldo o lo retenés.
+- **Opina**: en "11) Mi DT" le podés pedir que juegue con otra formación.
+  Te hace caso pero no le gusta; si pierden seguido, el arriesgado o el
+  impulsivo se planta. Si elegís vos el entrenamiento, te dice qué haría
+  él, y se queja si el plantel está fundido o vienen mal.
+- **Propone jugadores**: cuando pide un refuerzo, nombra hasta tres
+  jugadores de otros clubes o libres, que mejoren al titular y que el club
+  pueda pagar, elegidos según su personalidad (el conservador prefiere
+  veteranos, el arriesgado los de más potencial). Un DT de más prestigio
+  conoce más clubes. Con "Andá a buscar" vas directo a negociar; la lista
+  queda en el mercado como "📋 Pedidos del DT". Si traés justo al que te
+  pidió, se pone más contento.
+
+### Hinchada y medios
+
+- Cada club tiene una hinchada de 0 a 100 que sube y baja con los
+  resultados; en los clásicos (Boca-River, Racing-Independiente,
+  Central-Newell's, Estudiantes-Gimnasia, San Lorenzo-Huracán y otros)
+  pesa más de dos veces. También se mueve al vender a una figura o traer
+  una, al salir campeón, ascender o descender.
+- Se nota en la plata (entradas y socios, hasta un 10% de los ingresos),
+  en la localía (hasta un 2%) y en la presión sobre el DT. Los medios
+  pesan más en los clubes grandes.
+- Noticias: clásicos, banderazos y silbidos.
 
 ### Los jugadores
 

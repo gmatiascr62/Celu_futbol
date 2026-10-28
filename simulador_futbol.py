@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-SIMULADOR DE FÚTBOL — 1.5
+SIMULADOR DE FÚTBOL — 1.6
 El partido se juega minuto a minuto con un modelo de Poisson entrenado con
 partidos reales (ver entrenar_modelo.py). Cada equipo puede tener un DT con
 IA que cambia la táctica según el resultado y el tiempo que queda.
@@ -33,6 +33,10 @@ Nacional (ver ascenso.json). Bajan los 2 últimos y suben los 2 primeros.
 
 Cada club tiene instalaciones y cuerpo técnico (ver club.py), que hacen que
 los jugadores mejoren más rápido, se lesionen menos y salgan mejores pibes.
+
+Los DT tienen historial y prestigio que se mueve, opinan si les imponés la
+formación o el entrenamiento, y proponen jugadores concretos. Cada club
+tiene una hinchada que se nota en la plata, la localía y la presión.
 
 Uso:
     python simulador_futbol.py                     # usa modelo_poisson.json
@@ -183,6 +187,8 @@ class Equipo:
     instalaciones: dict = field(default_factory=dict)   # ver club.py
     staff: dict = field(default_factory=dict)           # cuerpo técnico
     obras: list = field(default_factory=list)           # [instalación, fechas que faltan]
+    hinchada: float = 60.0             # humor de la hinchada, de 0 a 100
+    formacion_forzada: str | None = None   # la formación que le pediste al DT
 
 
 PLANTELES = {}   # se cargan de planteles.json
@@ -504,6 +510,8 @@ def elegir_alineacion(eq, rival, modelo, es_local, rng):
     queda con la que más puntos le da, según su personalidad."""
     if not eq.dt:
         return eq.formacion, J.armar_xi(J.aptos(eq.plantel), eq.formacion)
+    if eq.formacion_forzada:      # la formación que le pidió el dueño
+        return eq.formacion_forzada, J.armar_xi(J.aptos(eq.plantel), eq.formacion_forzada)
     f_rival = rival.formacion if not rival.dt else J.FORMACION_BASE
     ra, rd, *_ = J.fuerza(J.armar_xi(J.aptos(rival.plantel), f_rival), f_rival)
     p = PERSONALIDADES[eq.dt]
@@ -585,6 +593,9 @@ def mostrar_alineacion(e, formacion, xi, tactica):
     print(f" Táctica: {tactica}")
 
 
+EFECTO_ALIENTO = 0.02   # la hinchada mueve hasta un 2% los goles del local
+
+
 def simular_partido(local, visitante, modelo, mostrar=True, semilla=None,
                     decisor=None):
     """decisor: función que decide la táctica de un DT. Por defecto usa la
@@ -633,7 +644,8 @@ def simular_partido(local, visitante, modelo, mostrar=True, semilla=None,
         fz = {k: J.fuerza(cancha[k], formacion[k]) for k in "LV"}
         mu_l = math.exp(modelo["base"] + modelo["localia"] + fz["L"][0] + fz["V"][1])
         mu_v = math.exp(modelo["base"] + fz["V"][0] + fz["L"][1])
-        return {"L": mu_l * local.moral, "V": mu_v * visitante.moral}
+        aliento = 1 + EFECTO_ALIENTO * (local.hinchada - 60) / 40   # cancha llena
+        return {"L": mu_l * local.moral * aliento, "V": mu_v * visitante.moral}
 
     def creacion(k):
         campo = [j.creacion * j.energia for j, s in cancha[k] if s != "ARQ"]
@@ -1277,9 +1289,14 @@ def cerrar_temporada(p):
         registro["puesto"] = posicion(tabla_division(p, d), p["mio"])[0]
         registro["division_mio"] = p["divisiones"][d]
     registro["ascensos"], registro["descensos"] = [], []
+    balance_de_temporada(p, registro)
+    for nombre, campeon, _ in registro["campeones"]:
+        e = next(x for x in p["equipos"] if x.nombre == campeon)
+        e.hinchada = min(100.0, e.hinchada + 15)
     for club, de, a in cambios_de_categoria(p):
         p["division"][club] = a
         e = next(x for x in p["equipos"] if x.nombre == club)
+        e.hinchada = max(0.0, min(100.0, e.hinchada + (15 if a < de else -20)))
         if a < de:
             e.ingreso = round(e.ingreso * SUBA_DE_INGRESOS, 3)
             registro["ascensos"].append(club)
@@ -1304,6 +1321,91 @@ def cerrar_temporada(p):
     p["fin_contratos"] = M.vencimientos_ia(p["equipos"], p["mio"], p["libres"], rng)
     contratos_dt(p)
     return cambios
+
+
+def balance_de_temporada(p, registro):
+    """Fin de temporada: el prestigio de cada DT sube o baja según cómo le
+    fue contra lo que se esperaba, y se anotan sus logros."""
+    campeones = {c: nombre for nombre, c, _ in registro["campeones"]}
+    cambios = {club: (de, a) for club, de, a in cambios_de_categoria(p)}
+    temporada = p["temporada"]
+    for e in p["equipos"]:
+        t = p["tecnicos"].get(e.nombre)
+        if t is None:
+            continue
+        d = division_de(p, e.nombre)
+        puesto = posicion(tabla_division(p, d), e.nombre)[0]
+        T.cambiar_prestigio(t, max(-6, min(6, 0.6 * (p["esperado"][e.nombre] - puesto))))
+        if e.nombre in campeones:
+            T.cambiar_prestigio(t, 8)
+            t.logros.append(f"🏆 Campeón {campeones[e.nombre]} T{temporada} con {e.nombre}")
+        if e.nombre in cambios:
+            de, a = cambios[e.nombre]
+            if a < de:
+                T.cambiar_prestigio(t, 6)
+                t.logros.append(f"⬆ Ascendió con {e.nombre} T{temporada}")
+            else:
+                T.cambiar_prestigio(t, -6)
+                t.logros.append(f"⬇ Descendió con {e.nombre} T{temporada}")
+
+
+# ---------------------------------------------------------------- hinchada
+# El humor de cada hinchada (0 a 100) sube y baja con los resultados, pesa
+# el doble en los clásicos, y se nota en la plata (entradas y socios), en la
+# localía y en la presión sobre el DT. Los medios pesan más en los grandes.
+CLASICOS = {frozenset(par) for par in (
+    ("Boca Juniors", "River Plate"), ("Racing Club", "Independiente"),
+    ("Rosario Central", "Newells Old Boys"), ("Estudiantes L.P.", "Gimnasia L.P."),
+    ("San Lorenzo", "Huracan"), ("Colon de Santa Fe", "Union de Santa Fe"),
+    ("Talleres Cordoba", "Belgrano"), ("Lanus", "Banfield"),
+    ("Velez Sarsfield", "Ferro"), ("Atl. Tucuman", "San Martin Tucuman"),
+    ("Godoy Cruz", "Ind. Rivadavia"), ("Chacarita", "Atlanta"),
+    ("Quilmes", "Arsenal Sarandi"), ("Los Andes", "Temperley"))}
+ENTRADAS = 0.10   # la hinchada mueve hasta un 10% los ingresos del año
+
+
+def es_clasico(a, b):
+    return frozenset((a, b)) in CLASICOS
+
+
+def peso_medios(p, club):
+    """Cuánto pesan los medios: mucho en los grandes, poco en el ascenso."""
+    if division_de(p, club) > 0:
+        return 0.8
+    return 1.4 if p["esperado_global"][club] <= 6 else 1.0
+
+
+def cara(h):
+    return "😍" if h >= 75 else "🙂" if h >= 55 else "😐" if h >= 35 else "😡"
+
+
+def hinchada_fecha(p, partidos):
+    """Después de cada fecha: el humor de las hinchadas y lo que entra por
+    entradas y socios."""
+    mio = p["mio"]
+    for local, visitante, gl, gv in partidos:
+        clasico = es_clasico(local.nombre, visitante.nombre)
+        for e, gf, gc in ((local, gl, gv), (visitante, gv, gl)):
+            antes = e.hinchada
+            cambio = 3 if gf > gc else -0.5 if gf == gc else -3
+            if clasico:
+                cambio *= 2.5
+            e.hinchada = max(0.0, min(100.0, e.hinchada + cambio + 0.03 * (60 - e.hinchada)))
+            if e.nombre == mio:
+                t = mi_dt(p)
+                if antes >= 30 > e.hinchada and t:
+                    p["noticias"].append(f"📰 Silbidos en la cancha de {mio}: la hinchada "
+                                         f"pide la cabeza de {t.completo}.")
+                elif antes <= 85 < e.hinchada:
+                    p["noticias"].append(f"📰 ¡Banderazo! La hinchada de {mio} está de fiesta.")
+        if clasico and division_de(p, local.nombre) == division_a_mostrar(p):
+            p["noticias"].append(f"📰 Clásico: {local.nombre} {gl}-{gv} {visitante.nombre}")
+    for e in p["equipos"]:
+        e.caja += ENTRADAS * e.ingreso * (e.hinchada - 60) / 40 / len(p["fixture"])
+
+
+def cambiar_hinchada(e, delta):
+    e.hinchada = max(0.0, min(100.0, e.hinchada + delta))
 
 
 def mostrar_historial(p):
@@ -1356,7 +1458,7 @@ def torneo_largo(modelo):
         fixture, tabla, semilla = p["fixture"], p["tabla"], p["semilla"]
         for e in equipos:
             e.moral = T.moral(p["tecnicos"].get(e.nombre))
-        marcadores = {}
+        marcadores, partidos = {}, []
         fecha = fixture[p["numero"]]
         p["numero"] += 1
         numero = p["numero"]
@@ -1375,6 +1477,7 @@ def torneo_largo(modelo):
                                             semilla=f"{clave}|{l}|{v}")
             anotar(tabla, local, visitante, gl, gv)
             marcadores[local.nombre], marcadores[visitante.nombre] = (gl, gv), (gv, gl)
+            partidos.append((local, visitante, gl, gv))
             for lado, j, _ in stats["goles"]:
                 p["goleadores"][(j.corto, (local if lado == "L" else visitante).nombre)] += 1
             resultados.append((es_mio, f"{local.nombre[:15]} {gl}-{gv} {visitante.nombre[:15]}",
@@ -1398,6 +1501,7 @@ def torneo_largo(modelo):
                     informe_obras.append(f"🏗 Terminó la obra: {C.INSTALACIONES[tipo]} "
                                          f"nivel {e.instalaciones[tipo]}.")
         tras_fecha_dt(p, marcadores, cierra)
+        hinchada_fecha(p, partidos)
         guardar_partida(p)
         return resultados
 
@@ -1411,7 +1515,8 @@ def torneo_largo(modelo):
             donde = f" en la {p['divisiones'][d]}" if len(p["divisiones"]) > 1 else ""
             print(f"\n{mio}: {pos}°{donde} con {f['Pts']} puntos "
                   f"({f['G']}G {f['E']}E {f['P']}P)")
-            print(f"Caja: {M.plata(mi_equipo().caja)}")
+            print(f"Caja: {M.plata(mi_equipo().caja)} · Hinchada: "
+                  f"{cara(mi_equipo().hinchada)} {mi_equipo().hinchada:.0f}")
 
     def mi_equipo():
         return next(e for e in equipos if e.nombre == mio)
@@ -1488,6 +1593,7 @@ def torneo_largo(modelo):
             p["plan_mio"] = pedir_entrenamiento()
             if p["plan_mio"]:
                 print(f"Plan: {p['plan_mio'][0]} ({p['plan_mio'][1]}) todas las semanas.")
+                opinion_entrenamiento(p)
             else:
                 print("El DT decide el entrenamiento cada semana.")
             guardar_partida(p)
@@ -1518,8 +1624,9 @@ def torneo_largo(modelo):
 # Cada club tiene un DT con nombre, prestigio, sueldo, contrato y ánimo
 # (ver tecnicos.py). El de tu club te pide reuniones; los de los otros
 # clubes pueden ser echados si la presión es insoportable.
-PRIORIDAD = {"renuncia": 100, "promesa": 90, "ultimatum": 80, "venta": 70,
-             "racha": 60, "refuerzo": 50, "renovacion": 95, "regular": 10}
+PRIORIDAD = {"renuncia": 100, "renovacion": 95, "promesa": 90, "lo_quieren": 88,
+             "ultimatum": 80, "venta": 70, "entrenamiento": 65, "formacion": 65,
+             "racha": 60, "refuerzo": 50, "regular": 10}
 
 
 def fuerza_titular(e):
@@ -1550,6 +1657,7 @@ def iniciar_tecnicos(p):
             continue
         prestigio = T.prestigio_para(p["esperado_global"][e.nombre], total, rng)
         p["tecnicos"][e.nombre] = T.nuevo(rng, usados, e.dt, prestigio)
+        T.llega_a(p["tecnicos"][e.nombre], e.nombre, p["temporada"])
         e.ingreso += p["tecnicos"][e.nombre].sueldo   # el club ya contaba con pagarle
     p["dts_libres"] = []
     T.bolsa_libres(p["dts_libres"], rng, usados)
@@ -1602,6 +1710,22 @@ def promesas_pendientes(p):
             if pr["ventana"] == clave and not T.cumple(pr, p["fichajes_ventana"], mi.staff)]
 
 
+def candidatos_del_dt(p, t, pos, nivel, rng):
+    """Los jugadores que el DT propone para el puesto: [(nombre, línea)]."""
+    mi = next(e for e in p["equipos"] if e.nombre == p["mio"])
+    lista = M.recomendar(p["equipos"], mi, p["libres"], pos, nivel + 3, t.personalidad,
+                         t.prestigio, rng)
+    salida = []
+    for i, (j, club, precio) in enumerate(lista):
+        donde = (f"{club.nombre}, piden {M.plata(precio)}" if club
+                 else f"libre, pide {M.plata(M.sueldo_pedido(j))}/año")
+        gusta = " · ★ mi preferido" if i == 0 else ""
+        puesto = j.pos if j.pos == pos else f"{j.pos}→{pos}"
+        salida.append((j.completo, f"{j.corto} ({puesto}, {j.edad}a, Nv{J.nivel(j)}): "
+                                   f"{donde}{gusta}"))
+    return salida
+
+
 def pedido_de_mercado(p, clave):
     """Cuando abre el mercado, el DT pide lo que más le falta."""
     t = mi_dt(p)
@@ -1612,12 +1736,16 @@ def pedido_de_mercado(p, clave):
         return
     costo = 1.2 * math.exp(0.13 * (nivel + 3 - 70))
     rng = random.Random(f"{p['semilla']}|{clave}|pedido")
-    proponer(p, T.reunion_refuerzo(t, rng, pos, nivel, mi.caja, costo, ventana, True),
-             "refuerzo")
+    proponer(p, T.reunion_refuerzo(t, rng, pos, nivel, mi.caja, costo, ventana, True,
+                                   candidatos_del_dt(p, t, pos, nivel, rng)), "refuerzo")
 
 
 def aviso_venta(p, mi, j):
-    """Si vendés a un titular, el DT se entera (y no le gusta)."""
+    """Si vendés a un titular, el DT se entera (y no le gusta). Si es una de
+    las tres figuras, la hinchada tampoco."""
+    if j in sorted(mi.plantel, key=J.nivel)[-3:]:
+        cambiar_hinchada(mi, -8)
+        print(f"😡 A la hinchada no le gustó que se vaya {j.corto}.")
     t = mi_dt(p)
     if t is None or id(j) not in M.titulares(mi):
         return
@@ -1636,10 +1764,15 @@ def reemplazar_dt(p, e, rng, motivo):
     p["dts_libres"].remove(nuevo)
     T.reiniciar(nuevo)
     p["tecnicos"][e.nombre] = nuevo
+    T.llega_a(nuevo, e.nombre, p["temporada"])
     e.dt = nuevo.personalidad
     e.formacion = formacion_preferida(f"{e.nombre}|{nuevo.apellido}", e.dt)
     if viejo:
         T.reiniciar(viejo)
+        T.se_va_de(viejo, p["temporada"])
+        if motivo == "echó":
+            viejo.despidos += 1
+            T.cambiar_prestigio(viejo, -4)
         viejo.ultimo_club = e.nombre
         p["dts_libres"].append(viejo)
         p["noticias"].append(f"📰 {e.nombre} {motivo} a {viejo.completo}. "
@@ -1662,7 +1795,7 @@ def tras_fecha_dt(p, marcadores, cierra):
         T.tras_partido(t, gf, gc)
         puesto = posicion(tabla_division(p, division_de(p, e.nombre)), e.nombre)[0]
         T.actualizar_presion(t, puesto, p["esperado"][e.nombre], p["ultimos"][e.nombre],
-                             jugadas)
+                             jugadas, peso_medios(p, e.nombre), e.hinchada)
         if e.nombre != p["mio"] and T.lo_echan(t, rng):
             reemplazar_dt(p, e, rng, "echó")
     # sueldos de los DT
@@ -1676,8 +1809,10 @@ def tras_fecha_dt(p, marcadores, cierra):
     mi, pos, nivel, ventana = pedido_de_refuerzo(p)
     # promesas de la ventana que acaba de cerrar
     if cierra:
-        for promesa, ok in T.revisar_promesas(t, cierra, p["fichajes_ventana"], mi.staff):
-            proponer(p, T.reunion_promesa(t, rng, promesa, ok), "promesa")
+        for promesa, ok, exacto in T.revisar_promesas(t, cierra, p["fichajes_ventana"],
+                                                       mi.staff):
+            proponer(p, T.reunion_promesa(t, rng, promesa, ok, exacto), "promesa")
+        p["pedidos_dt"] = []
     if t.satisfaccion < T.RENUNCIA:
         proponer(p, T.reunion_renuncia(t, rng), "renuncia")
         return
@@ -1687,6 +1822,7 @@ def tras_fecha_dt(p, marcadores, cierra):
         return
     if t.satisfaccion > 50 and "ultimatum" in t.avisos:
         t.avisos.remove("ultimatum")
+    opiniones_tras_fecha(p, t, mi, *marcadores.get(mi.nombre, (0, 0)), rng)
     ultimos = p["ultimos"][mi.nombre]
     sin_ganar = len(ultimos) - len(ultimos.rstrip("EP"))
     sin_perder = len(ultimos) - len(ultimos.rstrip("GE"))
@@ -1735,7 +1871,8 @@ def tras_fecha_dt(p, marcadores, cierra):
             reunion = T.reunion_juvenil(t, rng, j)
         elif tema == "refuerzo":
             costo = 1.2 * math.exp(0.13 * (nivel + 3 - 70))
-            reunion = T.reunion_refuerzo(t, rng, pos, nivel, mi.caja, costo, ventana, False)
+            reunion = T.reunion_refuerzo(t, rng, pos, nivel, mi.caja, costo, ventana, False,
+                                         candidatos_del_dt(p, t, pos, nivel, rng))
         else:
             reunion = T.reunion_general(t, rng)
         proponer(p, reunion, "regular")
@@ -1745,6 +1882,7 @@ def contratos_dt(p):
     """Fin de temporada: se descuenta un año de contrato. En los otros
     clubes renuevan si la cosa anduvo bien; con el tuyo se habla."""
     rng = random.Random(f"{p['semilla']}|{p['temporada']}|contratos")
+    cambiaron = []
     for e in p["equipos"]:
         t = p["tecnicos"].get(e.nombre)
         if t is None:
@@ -1758,6 +1896,17 @@ def contratos_dt(p):
             t.contrato = 2
         else:
             reemplazar_dt(p, e, rng, "no le renovó")
+            cambiaron.append(e)
+    # si tu DT tiene más prestigio que el que eligió un club más grande, lo tientan
+    t = mi_dt(p)
+    if t is None:
+        return
+    mas_grandes = [e for e in cambiaron
+                   if p["esperado_global"][e.nombre] < p["esperado_global"][p["mio"]]
+                   and t.prestigio >= p["tecnicos"][e.nombre].prestigio + 5]
+    if mas_grandes and rng.random() < 0.6:
+        club = min(mas_grandes, key=lambda e: p["esperado_global"][e.nombre]).nombre
+        proponer(p, T.reunion_lo_quieren(t, rng, club), "lo_quieren")
 
 
 def mostrar_reunion(p):
@@ -1769,6 +1918,8 @@ def mostrar_reunion(p):
     print(f"📣 Reunión con tu DT, {t.completo}")
     print("=" * ANCHO)
     print(textwrap.fill(f"«{r['texto']}»", ANCHO))
+    for i, linea in enumerate(r.get("lista", []), 1):
+        print(textwrap.fill(f"{i}. {linea}", ANCHO, subsequent_indent="   "))
     if r["tema"] in ("renuncia", "no_renueva"):
         input("\nEnter para seguir...")
         se_va_mi_dt(p)
@@ -1781,6 +1932,13 @@ def mostrar_reunion(p):
     n = pedir_numero("> ", 1, len(r["opciones"]))
     extra, respuesta = T.aplicar(t, r["opciones"][n - 1])
     print(textwrap.fill(f"«{respuesta}»", ANCHO))
+    if r.get("candidatos") and n <= 2:
+        p["pedidos_dt"] = r["candidatos"]        # quedan en el mercado como pedidos
+        mi = next(e for e in p["equipos"] if e.nombre == p["mio"])
+        if n == 1 and ventana_actual(p):
+            ir_a_buscar(p, mi, r["candidatos"][0])
+        elif n == 1:
+            print("Te lo va a recordar cuando abra el mercado (📋 Pedidos del DT).")
     if extra and "renovar" in extra:
         if extra["renovar"]:
             t.contrato = extra["renovar"]
@@ -1788,11 +1946,47 @@ def mostrar_reunion(p):
             print(f"Renovó por {t.contrato} temporadas.")
         else:
             se_va_mi_dt(p)
+    elif extra and "oferta" in extra:
+        se_va_a_otro_club(p, t, extra["oferta"])
+    elif extra and "aumento" in extra:
+        t.aumento = round(t.aumento * extra["aumento"], 3)
+        print(f"Ahora cobra {M.plata(t.sueldo)}/año.")
+    elif extra and "plan" in extra:
+        p["plan_mio"] = None
+        print("El entrenamiento lo decide el DT.")
+    elif extra and "formacion" in extra:
+        mi = next(e for e in p["equipos"] if e.nombre == p["mio"])
+        mi.formacion_forzada = None
+        p["derrotas_formacion"] = 0
+        print(f"Vuelve a jugar con su {mi.formacion}.")
+
+
+def se_va_a_otro_club(p, t, club):
+    """Tu DT se va a un club más grande, que paga la rescisión. El DT que
+    había elegido ese club queda libre."""
+    mi = next(e for e in p["equipos"] if e.nombre == p["mio"])
+    otro = next(e for e in p["equipos"] if e.nombre == club)
+    compensacion = t.sueldo * max(t.contrato, 1)
+    mi.caja += compensacion
+    reemplazado = p["tecnicos"][club]
+    T.se_va_de(reemplazado, p["temporada"])
+    reemplazado.ultimo_club = club
+    p["dts_libres"].append(reemplazado)
+    T.se_va_de(t, p["temporada"])
+    T.reiniciar(t)
+    T.llega_a(t, club, p["temporada"])
+    p["tecnicos"][club] = t
+    otro.dt = t.personalidad
+    otro.formacion = formacion_preferida(f"{club}|{t.apellido}", t.personalidad)
+    p["tecnicos"][p["mio"]] = None
+    print(f"{t.completo} es el nuevo DT de {club}. {club} paga "
+          f"{M.plata(compensacion)} de rescisión.")
 
 
 def se_va_mi_dt(p):
     t = mi_dt(p)
     T.reiniciar(t)
+    T.se_va_de(t, p["temporada"])
     t.ultimo_club = p["mio"]
     p["dts_libres"].append(t)
     p["tecnicos"][p["mio"]] = None
@@ -1807,12 +2001,15 @@ def contratar_dt(p):
     for i, t in enumerate(libres, 1):
         print(f"{i}. {t.completo}, {t.edad} años")
         print(f"   {t.personalidad} · prestigio {t.prestigio} · {M.plata(t.sueldo)}/año")
+        print(textwrap.fill(f"   {T.resumen_cv(t)}", ANCHO, subsequent_indent="   "))
     t = libres[pedir_numero("¿A quién contratás? ", 1, len(libres)) - 1]
     p["dts_libres"].remove(t)
     T.reiniciar(t)
+    T.llega_a(t, mi.nombre, p["temporada"])
     p["tecnicos"][mi.nombre] = t
     mi.dt = t.personalidad
     mi.formacion = formacion_preferida(f"{mi.nombre}|{t.apellido}", t.personalidad)
+    mi.formacion_forzada = None
     print(f"✅ {t.completo} es el nuevo DT de {mi.nombre} ({t.personalidad}, "
           f"prefiere el {mi.formacion}).")
 
@@ -1820,15 +2017,88 @@ def contratar_dt(p):
 def menu_dt(p):
     t = mi_dt(p)
     T.mostrar(t, p["mio"])
+    mi = next(e for e in p["equipos"] if e.nombre == p["mio"])
     costo = t.sueldo * max(t.contrato, 0.5)
+    juega = mi.formacion_forzada or mi.formacion
+    print(f"Juega con: {juega}" + (" (se lo pediste vos)" if mi.formacion_forzada else ""))
     print(f"\n1) Volver  2) Echarlo (cuesta {M.plata(costo)})")
-    if input("> ").strip() == "2":
+    print("3) Pedirle que juegue con otra formación")
+    opcion = input("> ").strip()
+    if opcion == "3":
+        pedir_formacion_al_dt(p, mi, t)
+        return
+    if opcion == "2":
         print("¿Seguro? (s/n)")
         if input("> ").strip().lower() == "s":
             next(e for e in p["equipos"] if e.nombre == p["mio"]).caja -= costo
             p["reunion"] = None
             se_va_mi_dt(p)
             contratar_dt(p)
+
+
+def dice_el_dt(t, texto):
+    print(textwrap.fill(f"🗣 {t.apellido}: «{texto}»", ANCHO, subsequent_indent="   "))
+
+
+def pedir_formacion_al_dt(p, mi, t):
+    nombres = list(J.FORMACIONES)
+    print("\n0) Que elija él")
+    for i, f in enumerate(nombres, 1):
+        print(f"{i}) {f}" + (" (la que prefiere)" if f == mi.formacion else ""))
+    n = pedir_numero("> ", 0, len(nombres))
+    p["derrotas_formacion"] = 0
+    if n == 0:
+        mi.formacion_forzada = None
+        T.cambiar(t, sat=3)
+        dice_el_dt(t, "Gracias, presidente. Usted no se va a arrepentir.")
+        return
+    mi.formacion_forzada = nombres[n - 1]
+    if mi.formacion_forzada == mi.formacion:
+        mi.formacion_forzada = None
+        dice_el_dt(t, "Justo lo que pensaba hacer.")
+        return
+    T.cambiar(t, sat=-5)
+    dice_el_dt(t, f"Usted manda, presidente. Jugamos con el {mi.formacion_forzada}, "
+                  f"aunque yo no lo haría.")
+
+
+def opinion_entrenamiento(p):
+    """Cuando elegís vos el entrenamiento, el DT opina."""
+    t = mi_dt(p)
+    if t is None:
+        return
+    mi = next(e for e in p["equipos"] if e.nombre == p["mio"])
+    suyo = plan_dt(mi, random.Random(f"{p['semilla']}|{p['numero']}|opinion"))
+    if tuple(p["plan_mio"]) == tuple(suyo):
+        dice_el_dt(t, "Coincido, es lo que yo hubiera hecho.")
+    else:
+        T.cambiar(t, sat=-3)
+        dice_el_dt(t, f"Yo hubiera hecho {suyo[0]} ({suyo[1]}), pero usted manda.")
+
+
+def opiniones_tras_fecha(p, t, mi, gf, gc, rng):
+    """Si le impusiste la formación o el entrenamiento, el DT opina según
+    cómo salió el partido."""
+    if mi.formacion_forzada:
+        if gf > gc:
+            T.cambiar(t, sat=1)
+            if rng.random() < 0.25:
+                p["noticias"].append(f"🗣 {t.apellido}: «Lo admito, con el "
+                                     f"{mi.formacion_forzada} jugamos bien.»")
+        elif gf < gc:
+            T.cambiar(t, sat=-2)
+            p["derrotas_formacion"] = p.get("derrotas_formacion", 0) + 1
+            if p["derrotas_formacion"] >= 3 and t.personalidad in ("arriesgado", "impulsivo"):
+                proponer(p, T.reunion_formacion(t, rng, mi.formacion_forzada,
+                                                p["derrotas_formacion"]), "formacion")
+                p["derrotas_formacion"] = 0
+    if p["plan_mio"]:
+        sanos = [j for j in mi.plantel if not j.lesion]
+        cansados = sum(j.fisico for j in sanos) / len(sanos) < 0.85
+        queja = (cansados and p["plan_mio"][1] == "fuerte") or (gf < gc and rng.random() < 0.15)
+        if queja and p["numero"] - p.get("queja_entreno", -99) >= 6:
+            p["queja_entreno"] = p["numero"]
+            proponer(p, T.reunion_entrenamiento(t, rng), "entrenamiento")
 
 
 def mostrar_noticias(p):
@@ -2115,6 +2385,8 @@ def menu_mercado(p):
         print(f"3) Ofertas recibidas ({len(p['ofertas'])})  4) Vender")
         print("5) Liberar  6) Movimientos")
         print("7) Contratos  8) Volver")
+        if p.get("pedidos_dt"):
+            print(f"9) 📋 Pedidos del DT ({len(p['pedidos_dt'])})")
         opcion = input("> ").strip()
         if opcion == "1":
             comprar(p, mi)
@@ -2132,6 +2404,8 @@ def menu_mercado(p):
             renovar(p, mi)
         elif opcion == "8":
             return
+        elif opcion == "9" and p.get("pedidos_dt"):
+            pedidos_del_dt(p, mi)
         else:
             print("Elegí del 1 al 8.")
 
@@ -2152,7 +2426,11 @@ def comprar(p, mi):
     k = elegir_de_lista(len(candidatos))
     if k is None:
         return
-    j, vendedor = candidatos[k]
+    negociar_compra(p, mi, *candidatos[k])
+
+
+def negociar_compra(p, mi, j, vendedor):
+    """Negociación con el club y después con el jugador."""
     if len(mi.plantel) >= M.PLANTEL_MAX:
         print(f"Tenés {M.PLANTEL_MAX} jugadores: vendé o liberá a alguno antes.")
         return
@@ -2186,10 +2464,58 @@ def comprar(p, mi):
         print("Se cayó el pase.")
         return
     M.transferir(j, vendedor, mi, monto, sueldo, anios)
-    p["fichajes_ventana"].append([j.pos, j.pos2, J.nivel(j)])
+    llego(p, mi, j)
     p["movimientos"].append(f"{j.corto} ({j.pos}, {J.nivel(j)}): {vendedor.nombre} → "
                             f"{mi.nombre}, {M.plata(monto)}")
     print(f"✅ ¡{j.completo} es nuevo jugador de {mi.nombre}! ({M.plata(monto)})")
+
+
+def llego(p, mi, j):
+    """Un refuerzo nuevo: cuenta para las promesas al DT, y si es una de las
+    figuras del plantel, la hinchada se entusiasma."""
+    p["fichajes_ventana"].append([j.pos, j.pos2, J.nivel(j), j.completo])
+    if j in sorted(mi.plantel, key=J.nivel)[-3:]:
+        cambiar_hinchada(mi, 5)
+        print(f"😍 La hinchada festeja la llegada de {j.corto}.")
+
+
+def buscar_por_nombre(p, nombre):
+    """El jugador con ese nombre y el club que lo tiene (None si está libre)."""
+    for e in p["equipos"]:
+        for j in e.plantel:
+            if j.completo == nombre:
+                return j, e
+    for j in p["libres"]:
+        if j.completo == nombre:
+            return j, None
+    return None, None
+
+
+def ir_a_buscar(p, mi, nombre):
+    """Desde una reunión o desde los pedidos: negociar por un jugador."""
+    j, club = buscar_por_nombre(p, nombre)
+    if j is None or club is mi:
+        print("Ese jugador ya no está disponible.")
+    elif club is None:
+        negociar_libre(p, mi, j)
+    else:
+        negociar_compra(p, mi, j, club)
+
+
+def pedidos_del_dt(p, mi):
+    if not p.get("pedidos_dt"):
+        print("El DT no te pidió a nadie en esta ventana.")
+        return
+    lista = [buscar_por_nombre(p, n) for n in p["pedidos_dt"]]
+    lista = [(j, c) for j, c in lista if j is not None and c is not mi]
+    print()
+    for i, (j, c) in enumerate(lista, 1):
+        donde = f"{c.nombre[:20]} · piden {M.plata(M.precio_pedido(c, j))}" if c else \
+                f"libre · pide {M.plata(M.sueldo_pedido(j))}/año"
+        linea_jugador(i, j, donde)
+    k = elegir_de_lista(len(lista))
+    if k is not None:
+        ir_a_buscar(p, mi, lista[k][0].completo)
 
 
 def fichar_libres(p, mi):
@@ -2205,17 +2531,20 @@ def fichar_libres(p, mi):
     k = elegir_de_lista(len(libres))
     if k is None:
         return
+    negociar_libre(p, mi, libres[k])
+
+
+def negociar_libre(p, mi, j):
     if len(mi.plantel) >= M.PLANTEL_MAX:
         print(f"Tenés {M.PLANTEL_MAX} jugadores: vendé o liberá a alguno antes.")
         return
-    j = libres[k]
     rng = random.Random(f"{p['semilla']}|{p['ventana']}|{j.completo}")
     anios = max(1, M.anios_contrato(j) - 1)
     sueldo = negociar(j, M.pretension(j, rng), anios, mi)
     if sueldo is None:
         return
     M.fichar_libre(j, mi, p["libres"], sueldo, anios)
-    p["fichajes_ventana"].append([j.pos, j.pos2, J.nivel(j)])
+    llego(p, mi, j)
     p["movimientos"].append(f"{j.corto} ({j.pos}, {J.nivel(j)}): libre → {mi.nombre}")
     print(f"✅ Firmó {j.completo}.")
 
@@ -2455,7 +2784,7 @@ def ver_plantel(modelo):
 
 def main():
     global PLANTELES
-    print("SIMULADOR DE FÚTBOL — 1.5")
+    print("SIMULADOR DE FÚTBOL — 1.6")
     ruta = sys.argv[1] if len(sys.argv) > 1 else "modelo_poisson.json"
     modelo = cargar_modelo(ruta)
     cargar_ascenso(modelo)

@@ -31,6 +31,9 @@ plata, compras, ventas y si sigue o no en el cargo son tuyas.
   con la Liga Profesional; bajan 2 y suben 2.
 - **1.5**: instalaciones (predio, centro médico, estadio, inferiores) y
   cuerpo técnico (preparador físico, ayudantes, arqueros, inferiores).
+- **1.6**: DT completo: historial y prestigio, ofertas de otros clubes por
+  tu DT, opina de la formación y el entrenamiento, propone jugadores
+  concretos; hinchada, clásicos y medios.
 
 ## Próximo
 
@@ -41,8 +44,7 @@ Orden sugerido:
 3. **Que el DT hable con IA** (punto 3), opcional.
 4. Lo que falta del ascenso (punto 4), si hace falta.
 
-Lo que falta del DT (punto 2) y las ideas del final se pueden ir metiendo
-en el medio.
+Las ideas del final se pueden ir metiendo en el medio.
 
 ### 1. Mercado de pases: lo que falta
 Ya están el mercado (1.1) y los contratos (1.3). Queda:
@@ -52,15 +54,9 @@ Ya están el mercado (1.1) y los contratos (1.3). Queda:
   reemplazos para que la liga no pierda nivel.
 - Préstamos.
 
-### 2. DT con estado de ánimo: lo que falta
-Ya está la primera parte (1.2) y en la 1.3 pide vender a los que no usa.
-Queda:
-
-- Que opine sobre el entrenamiento y la formación, y que se enoje si se
-  los cambiás.
-- DT con historial: títulos, clubes por los que pasó, y que el prestigio
-  suba o baje según cómo le va.
-- Que la hinchada y la presión de los medios también cuenten.
+### 2. DT con estado de ánimo
+Hecho en la 1.2 y la 1.6: ánimo, reuniones, promesas, historial,
+prestigio, opiniones, jugadores que propone, hinchada y medios.
 
 ### 3. Que el DT hable con IA (opcional)
 Ya se puede hacer, porque las reuniones del punto 2 están armadas: cada
