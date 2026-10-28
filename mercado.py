@@ -389,3 +389,39 @@ def ofertas_por_jugador(equipos, mio, j, rng):
     if valor(j) >= VALOR_EXTERIOR and rng.random() < 0.6:
         ofertas.append((rng.choice(EXTERIOR), round(valor(j) * rng.uniform(0.9, 1.4), 3)))
     return sorted(ofertas, key=lambda o: -o[1])[:3]
+
+
+# ---------------------------------------------------------------- lo que propone el DT
+def recomendar(equipos, mi, libres, pos, nivel_min, personalidad, prestigio, rng, cantidad=3):
+    """Jugadores que el DT propone para un puesto: de otros clubes o libres,
+    que mejoren al titular, que el club pueda pagar y elegidos según su
+    personalidad. Un DT de más prestigio conoce más clubes.
+    Devuelve [(jugador, club que lo vende o None si es libre, precio)]."""
+    alcance = 0.4 + 0.6 * prestigio / 100
+    clubes = [e for e in equipos if e is not mi and rng.random() < alcance]
+    margen = 1.1 * mi.ingreso - masa_salarial(mi.plantel)
+    opciones = []
+    for v in clubes:
+        tits = None
+        for j in v.plantel:
+            if pos not in (j.pos, j.pos2) or J.nivel(j) < nivel_min or not puede_vender(v, j):
+                continue
+            tits = titulares(v) if tits is None else tits
+            precio = precio_pedido(v, j, tits)
+            if precio <= mi.caja and sueldo_pedido(j) <= margen:
+                opciones.append((j, v, precio))
+    for j in libres:
+        if pos in (j.pos, j.pos2) and J.nivel(j) >= nivel_min and sueldo_pedido(j) <= margen:
+            opciones.append((j, None, 0.0))
+
+    def puntaje(op):
+        j, _, precio = op
+        caro = precio / max(mi.caja, 0.5)
+        if personalidad == "conservador":
+            return J.nivel(j) + (2 if 27 <= j.edad <= 32 else -2 if j.edad < 23 else 0) - 3 * caro
+        if personalidad == "arriesgado":
+            return J.nivel(j) + 0.5 * (j.potencial - J.nivel(j))
+        if personalidad == "impulsivo":
+            return J.nivel(j) + rng.gauss(0, 4) - 4 * caro
+        return J.nivel(j) - 8 * caro
+    return sorted(opciones, key=puntaje, reverse=True)[:cantidad]
