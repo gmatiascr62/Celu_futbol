@@ -31,6 +31,18 @@ de la lista (`l` la muestra) o con `0` para inventar uno con ratings 1-100.
 
 ### En el celular
 
+**Con la app (APK).** GitHub arma el APK solo cada vez que cambia algo en
+`main` (pestaña *Actions* → "Armar APK" → la última corrida → *Artifacts*
+→ `celu-futbol-apk`). Viene en un zip: adentro está el `.apk` para
+instalar. Android avisa que es de origen desconocido porque no está en
+Play Store; hay que permitirlo una vez. La partida se guarda dentro de la
+app (si se desinstala, se pierde), y cada versión nueva es un APK nuevo
+que se instala encima. La app es el mismo juego con una pantalla de
+consola, botones para los números y un cuadro para escribir (`main.py`,
+con Kivy). Los emojis se cambian por símbolos que la letra sí tiene.
+
+**Con Pydroid 3.**
+
 Lo cómodo es tener un lanzador fuera del repo que baje la última versión de
 `main` como zip y ejecute el simulador. El lanzador define la variable de
 entorno `FUTBOL_PARTIDAS` con su propia carpeta, así la partida guardada
@@ -233,6 +245,8 @@ no se borra cuando se baja una versión nueva.
 
 | Archivo | Qué es |
 |---|---|
+| `main.py` | La app para Android (Kivy): la pantalla del juego. |
+| `buildozer.spec` | Cómo se arma el APK (lo usa GitHub Actions). |
 | `simulador_futbol.py` | El juego: partido, DT, cuadrangular, torneo largo y menú. |
 | `jugadores.py` | Jugadores, posiciones, formaciones, planteles, entrenamiento y temporadas. |
 | `mercado.py` | Valores, sueldos, finanzas de los clubes y mercado de pases. |

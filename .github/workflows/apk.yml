@@ -1,0 +1,61 @@
+name: Armar APK
+
+# Se corre a mano desde la pestaña Actions de GitHub ("Run workflow"),
+# y solo cuando cambia algo de la app (en main o en un PR).
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "*.py"
+      - "*.json"
+      - "buildozer.spec"
+      - ".github/workflows/apk.yml"
+  pull_request:
+    paths:
+      - "*.py"
+      - "*.json"
+      - "buildozer.spec"
+      - ".github/workflows/apk.yml"
+
+jobs:
+  apk:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Dependencias del sistema
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git zip unzip autoconf libtool pkg-config \
+            zlib1g-dev libncurses5-dev libncursesw5-dev libtinfo5 cmake \
+            libffi-dev libssl-dev automake
+
+      - name: Buildozer
+        run: pip install --upgrade buildozer "cython<3.0" setuptools
+
+      # Las herramientas de Android pesan varios GB: se guardan entre corridas
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.buildozer
+            .buildozer
+          key: buildozer-${{ hashFiles('buildozer.spec') }}
+
+      - name: Armar el APK
+        run: yes | buildozer android debug
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: celu-futbol-apk
+          path: bin/*.apk
