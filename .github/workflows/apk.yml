@@ -18,6 +18,11 @@ on:
       - "buildozer.spec"
       - ".github/workflows/apk.yml"
 
+# Si llega un cambio nuevo, se cancela el armado anterior.
+concurrency:
+  group: apk-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   apk:
     runs-on: ubuntu-22.04
