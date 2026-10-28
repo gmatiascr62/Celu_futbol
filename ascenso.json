@@ -1,38 +1,51 @@
 {
-  "_comentario": "Clubes de la Primera Nacional. El número es el peso histórico del club, de 1 a 5, y sirve para estimar su fuerza (no hay resultados reales para entrenar el modelo de esta categoría). Se puede editar: agregar, sacar o cambiar clubes. Si se cambia, hay que empezar una partida nueva.",
-  "nombre": "Primera Nacional",
-  "clubes": {
-    "Colon de Santa Fe": 5,
-    "San Martin Tucuman": 5,
-    "Quilmes": 4,
-    "Chacarita": 4,
-    "Ferro": 4,
-    "Nueva Chicago": 3,
-    "All Boys": 3,
-    "Atlanta": 3,
-    "Gimnasia Jujuy": 3,
-    "Patronato": 3,
-    "Temperley": 3,
-    "Almirante Brown": 3,
-    "Arsenal Sarandi": 3,
-    "Atl. Rafaela": 3,
-    "Agropecuario": 3,
-    "Dep. Moron": 3,
-    "Dep. Maipu": 3,
-    "Dep. Madryn": 3,
-    "Racing Cordoba": 2,
-    "Los Andes": 2,
-    "Brown Adrogue": 2,
-    "Almagro": 2,
-    "Chaco For Ever": 2,
-    "Def. de Belgrano": 2,
-    "Tristan Suarez": 2,
-    "Estudiantes BA": 2,
-    "Mitre SdE": 2,
-    "San Telmo": 2,
-    "Guemes": 2,
-    "Gimnasia y Tiro": 2,
-    "Colegiales": 1,
-    "Central Norte": 1
-  }
+  "_comentario": "Cómo se reparten los clubes en las divisiones. 'primera' son los clubes del modelo que juegan la Liga Profesional; los del modelo que no están ahí van a la primera división de abajo con su fuerza real. En las otras divisiones, el número es el peso histórico del club (1 a 5), que estima su fuerza porque no hay resultados reales de esas categorías; 'ajuste' baja la fuerza de toda la división. Todas las divisiones tienen que tener la misma cantidad de clubes (y par) para jugar las mismas fechas. Si se cambia algo, hay que empezar una partida nueva.",
+  "primera": [
+    "Boca Juniors", "River Plate", "Rosario Central", "Argentinos Jrs", "Velez Sarsfield",
+    "Lanus", "Estudiantes L.P.", "Independiente", "Racing Club", "Belgrano",
+    "Huracan", "Instituto", "Ind. Rivadavia", "Union de Santa Fe", "Gimnasia L.P.",
+    "Tigre", "Defensa y Justicia", "Talleres Cordoba", "Barracas Central", "San Lorenzo"
+  ],
+  "divisiones": [
+    {
+      "nombre": "Primera Nacional",
+      "ajuste": 0.0,
+      "clubes": {
+        "Colon de Santa Fe": 5,
+        "San Martin Tucuman": 5,
+        "Quilmes": 4,
+        "Chacarita": 4,
+        "Ferro": 4,
+        "Nueva Chicago": 3,
+        "All Boys": 3,
+        "Atlanta": 3
+      }
+    },
+    {
+      "nombre": "Primera B",
+      "ajuste": -0.3,
+      "clubes": {
+        "Gimnasia Jujuy": 3,
+        "Patronato": 3,
+        "Temperley": 3,
+        "Almirante Brown": 3,
+        "Arsenal Sarandi": 3,
+        "Atl. Rafaela": 3,
+        "Agropecuario": 3,
+        "Dep. Moron": 3,
+        "Dep. Maipu": 3,
+        "Dep. Madryn": 3,
+        "Racing Cordoba": 2,
+        "Los Andes": 2,
+        "Brown Adrogue": 2,
+        "Almagro": 2,
+        "Chaco For Ever": 2,
+        "Def. de Belgrano": 2,
+        "Tristan Suarez": 2,
+        "Estudiantes BA": 2,
+        "Mitre SdE": 2,
+        "San Telmo": 2
+      }
+    }
+  ]
 }
