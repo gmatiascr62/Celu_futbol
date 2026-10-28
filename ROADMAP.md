@@ -34,6 +34,8 @@ plata, compras, ventas y si sigue o no en el cargo son tuyas.
 - **1.6**: DT completo: historial y prestigio, ofertas de otros clubes por
   tu DT, opina de la formación y el entrenamiento, propone jugadores
   concretos; hinchada, clásicos y medios.
+- **1.7**: tres divisiones de 20 clubes (Liga Profesional, Primera
+  Nacional y Primera B), torneos de 38 fechas.
 
 ## Próximo
 
@@ -74,12 +76,13 @@ libremente para elegir cuál de las opciones es.
   el DT entrenado decide mejor que un modelo de lenguaje.
 
 ### 4. El ascenso: lo que falta
-La primera parte ya está (1.4): Liga Profesional y Primera Nacional, 32
-clubes cada una, bajan 2 y suben 2. Se decidió no bajar de la Primera
-Nacional. Queda, si hace falta:
+Ya están (1.4 y 1.7): Liga Profesional, Primera Nacional y Primera B, 20
+clubes cada una, bajan 2 y suben 2 entre cada par. Queda, si hace falta:
 
-- Formatos más fieles: la Primera Nacional real tiene unos 36 clubes en
-  dos zonas, con final y reducido.
+- Formatos más fieles: en la realidad las categorías tienen más clubes,
+  zonas, finales y reducidos.
+- Volver a sumar los 4 clubes que quedaron afuera (Colegiales, Central
+  Norte, Güemes y Gimnasia y Tiro) si se agrega otra categoría.
 - Promedios para el descenso de Primera.
 - Entrenar el modelo del ascenso si aparece una fuente de resultados.
 
@@ -91,8 +94,8 @@ hacer cuando quieras.
 - **Identidad**: nombre, apodo, ciudad o barrio, colores y nombre de la
   cancha. El nombre aparece en el relato y en las tablas como cualquier
   otro club.
-- **Dónde arranca**: en la Primera Nacional, la categoría más baja del
-  juego, en lugar de uno de sus clubes.
+- **Dónde arranca**: en la Primera B, la categoría más baja del juego, en
+  lugar de uno de sus clubes.
 - **El primer plantel**: jugadores libres y pibes del barrio, flojos y
   baratos, con algunas joyas de potencial alto escondidas. Una parte se
   arma en una "prueba de jugadores" donde elegís a quiénes fichar.

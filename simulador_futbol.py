@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-SIMULADOR DE FÚTBOL — 1.6
+SIMULADOR DE FÚTBOL — 1.7
 El partido se juega minuto a minuto con un modelo de Poisson entrenado con
 partidos reales (ver entrenar_modelo.py). Cada equipo puede tener un DT con
 IA que cambia la táctica según el resultado y el tiempo que queda.
@@ -28,8 +28,9 @@ Los DT son personas (ver tecnicos.py): tienen nombre, prestigio, sueldo,
 contrato y ánimo. El de tu club te pide reuniones, se acuerda de lo que le
 prometiste y puede renunciar; a los de los otros clubes los echan.
 
-El torneo largo tiene dos categorías: la Liga Profesional y la Primera
-Nacional (ver ascenso.json). Bajan los 2 últimos y suben los 2 primeros.
+El torneo largo tiene tres categorías de 20 clubes: la Liga Profesional, la
+Primera Nacional y la Primera B (ver ascenso.json). Entre cada par de
+categorías bajan 2 y suben 2.
 
 Cada club tiene instalaciones y cuerpo técnico (ver club.py), que hacen que
 los jugadores mejoren más rápido, se lesionen menos y salgan mejores pibes.
@@ -867,33 +868,48 @@ def cargar_modelo(ruta):
     return MODELO_VACIO
 
 
-# Primera Nacional: no hay resultados reales para entrenar el modelo, así que
-# la fuerza de cada club se estima con su peso histórico (1 a 5). Los recién
-# ascendidos a Primera están medio punto por debajo de la media en la escala
-# del modelo (ataque menos defensa): eso es un club de peso 5 del ascenso.
+# Divisiones (ver ascenso.json): la Liga Profesional con los clubes del modelo
+# que figuran en "primera", y abajo las categorías del ascenso. No hay
+# resultados reales del ascenso para entrenar el modelo, así que la fuerza de
+# esos clubes se estima con su peso histórico (1 a 5). Los recién ascendidos
+# a Primera están medio punto por debajo de la media en la escala del modelo
+# (ataque menos defensa): eso es un club de peso 5 de la Primera Nacional.
 ARCHIVO_ASCENSO = "ascenso.json"
-CAMBIOS_DE_CATEGORIA = 2     # bajan los 2 últimos y suben los 2 primeros
+CAMBIOS_DE_CATEGORIA = 2     # entre cada par de divisiones bajan 2 y suben 2
+
+
+def fuerza_estimada(club, peso, ajuste):
+    rng = random.Random(f"ascenso|{club}")
+    neto = -1.10 + 0.12 * peso + ajuste + rng.gauss(0, 0.08)
+    sesgo = rng.gauss(0, 0.08)            # más de ataque o más de defensa
+    return {"ataque": neto / 2 + sesgo, "defensa": -neto / 2 + sesgo}
 
 
 def cargar_ascenso(modelo, ruta=ARCHIVO_ASCENSO):
-    """Agrega los clubes del ascenso al modelo y anota la división de cada club."""
-    primera = list(modelo["equipos"])
-    modelo["division"] = {c: 0 for c in primera}
+    """Arma las divisiones: agrega los clubes del ascenso al modelo y anota
+    la división de cada club. Los del modelo que no están en "primera"
+    bajan a la segunda división con su fuerza real."""
+    modelo["division"] = {c: 0 for c in modelo["equipos"]}
     modelo["divisiones"] = ["Liga Profesional"]
-    if not primera or not os.path.exists(ruta):
+    if not modelo["equipos"] or not os.path.exists(ruta):
         return
     with open(ruta, encoding="utf-8") as f:
         datos = json.load(f)
-    for club, peso in datos["clubes"].items():
-        if club in modelo["equipos"]:
-            continue
-        rng = random.Random(f"ascenso|{club}")
-        neto = -1.10 + 0.12 * peso + rng.gauss(0, 0.08)
-        sesgo = rng.gauss(0, 0.08)            # más de ataque o más de defensa
-        modelo["equipos"][club] = {"ataque": neto / 2 + sesgo, "defensa": -neto / 2 + sesgo}
-        modelo["division"][club] = 1
-    modelo["divisiones"].append(datos["nombre"])
-    print(f"Ascenso cargado: {len(datos['clubes'])} clubes de la {datos['nombre']}.")
+    primera = [c for c in datos.get("primera", modelo["equipos"]) if c in modelo["equipos"]]
+    bajan = [c for c in modelo["equipos"] if c not in primera]
+    modelo["division"] = {c: 0 for c in primera}
+    for d, division in enumerate(datos["divisiones"], 1):
+        modelo["divisiones"].append(division["nombre"])
+        if d == 1:
+            modelo["division"].update({c: 1 for c in bajan})
+        for club, peso in division["clubes"].items():
+            if club not in modelo["equipos"]:
+                modelo["equipos"][club] = fuerza_estimada(club, peso, division.get("ajuste", 0.0))
+            modelo["division"][club] = d
+    tamanios = [sum(1 for v in modelo["division"].values() if v == d)
+                for d in range(len(modelo["divisiones"]))]
+    print("Divisiones: " + ", ".join(f"{n} ({t})" for n, t in zip(modelo["divisiones"],
+                                                                     tamanios)) + ".")
 
 
 # ---------------------------------------------------------------- cuadrangular
@@ -1209,7 +1225,8 @@ def elegir_club_a_seguir(modelo):
 def nueva_partida(modelo):
     mio = elegir_club_a_seguir(modelo)
     equipos = []
-    for c in sorted(PLANTELES):
+    clubes = sorted(modelo.get("division") or PLANTELES)
+    for c in clubes:
         d = modelo["equipos"][c]
         e = Equipo(c, d["ataque"], d["defensa"])
         e.plantel = J.copiar_plantel(PLANTELES[c])
@@ -1225,7 +1242,7 @@ def nueva_partida(modelo):
     M.iniciar_finanzas(equipos)
     p = {"equipos": equipos, "mio": mio, "plan_mio": None, "temporada": 0,
          "semilla": random.randrange(10 ** 9), "historial": [],
-         "division": {c: modelo.get("division", {}).get(c, 0) for c in sorted(PLANTELES)},
+         "division": {c: modelo.get("division", {}).get(c, 0) for c in clubes},
          "divisiones": modelo.get("divisiones", ["Liga Profesional"]),
          "libres": [], "ofertas": [], "ventana": None, "movimientos": [], "sondeos": {}}
     empezar_temporada(p)
@@ -1446,8 +1463,8 @@ def torneo_largo(modelo):
     equipos, mio = p["equipos"], p["mio"]
     print(f"{len(equipos)} equipos, ida y vuelta.")
     if len(p["divisiones"]) > 1:
-        print(f"{' y '.join(p['divisiones'])}: bajan los {CAMBIOS_DE_CATEGORIA} últimos")
-        print(f"y suben los {CAMBIOS_DE_CATEGORIA} primeros.")
+        print(", ".join(p["divisiones"]) + f": entre cada una bajan "
+              f"{CAMBIOS_DE_CATEGORIA} y suben {CAMBIOS_DE_CATEGORIA}.")
     informe = None             # lo que pasó en el último entrenamiento de tu club
     informe_obras = []         # obras de tu club que se terminaron
 
@@ -2784,7 +2801,7 @@ def ver_plantel(modelo):
 
 def main():
     global PLANTELES
-    print("SIMULADOR DE FÚTBOL — 1.6")
+    print("SIMULADOR DE FÚTBOL — 1.7")
     ruta = sys.argv[1] if len(sys.argv) > 1 else "modelo_poisson.json"
     modelo = cargar_modelo(ruta)
     cargar_ascenso(modelo)
