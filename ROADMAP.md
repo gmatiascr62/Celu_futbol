@@ -38,11 +38,15 @@ plata, compras, ventas y si sigue o no en el cargo son tuyas.
   Nacional y Primera B), torneos de 38 fechas.
 - **1.8**: reserva de juveniles: pibes con potencial en estrellas, subirlos
   a Primera, venderlos afuera.
+- **2.0**: app para Android en Flutter, con el juego reescrito en Dart:
+  torneo largo completo con todas sus partes y partido amistoso.
 
 ## Próximo
 
 Orden sugerido:
 
+0. **La app para Android**: el cuadrangular, y que lo nuevo se haga
+   primero en la app (la versión de Python queda para Pydroid).
 1. **Fundar un club** (punto 5).
 2. **Que el DT hable con IA** (punto 3), opcional.
 3. Lo que falta del ascenso (punto 4), si hace falta.
