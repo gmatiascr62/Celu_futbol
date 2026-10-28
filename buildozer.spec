@@ -6,7 +6,7 @@ source.dir = .
 source.include_exts = py,json,ttf
 # los scripts de entrenamiento necesitan pandas/scipy y no van en la app
 source.exclude_patterns = entrenar_*.py
-version = 1.8
+version = 1.9
 requirements = python3,kivy==2.3.1
 orientation = portrait
 fullscreen = 0
