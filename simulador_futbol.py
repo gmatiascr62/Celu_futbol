@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-SIMULADOR DE FÚTBOL — 1.7
+SIMULADOR DE FÚTBOL — 1.8
 El partido se juega minuto a minuto con un modelo de Poisson entrenado con
 partidos reales (ver entrenar_modelo.py). Cada equipo puede tener un DT con
 IA que cambia la táctica según el resultado y el tiempo que queda.
@@ -38,6 +38,10 @@ los jugadores mejoren más rápido, se lesionen menos y salgan mejores pibes.
 Los DT tienen historial y prestigio que se mueve, opinan si les imponés la
 formación o el entrenamiento, y proponen jugadores concretos. Cada club
 tiene una hinchada que se nota en la plata, la localía y la presión.
+
+Cada club tiene una reserva con los pibes de las inferiores: llegan cada
+pretemporada, su potencial se ve en estrellas, y se suben a Primera o se
+venden afuera.
 
 Uso:
     python simulador_futbol.py                     # usa modelo_poisson.json
@@ -190,6 +194,7 @@ class Equipo:
     obras: list = field(default_factory=list)           # [instalación, fechas que faltan]
     hinchada: float = 60.0             # humor de la hinchada, de 0 a 100
     formacion_forzada: str | None = None   # la formación que le pediste al DT
+    reserva: list = field(default_factory=list)          # pibes de las inferiores
 
 
 PLANTELES = {}   # se cargan de planteles.json
@@ -1169,8 +1174,9 @@ def cargar_partida():
         return None
     equipos = []
     for d in datos["equipos"]:
-        e = Equipo(**{k: v for k, v in d.items() if k != "plantel"})
+        e = Equipo(**{k: v for k, v in d.items() if k not in ("plantel", "reserva")})
         e.plantel = [J.Jugador(**j) for j in d["plantel"]]
+        e.reserva = [J.Jugador(**j) for j in d.get("reserva", [])]
         equipos.append(e)
     datos["equipos"] = equipos
     datos["fixture"] = [[tuple(x) for x in fecha] for fecha in datos["fixture"]]
@@ -1182,7 +1188,8 @@ def cargar_partida():
     M.iniciar_contratos([e.plantel for e in equipos], random.Random(f"{datos['semilla']}|c"))
     M.iniciar_finanzas(equipos)
     datos["libres"] = [J.Jugador(**j) for j in datos.get("libres", [])]
-    mios = {j.completo: j for e in equipos if e.nombre == datos["mio"] for j in e.plantel}
+    mios = {j.completo: j for e in equipos if e.nombre == datos["mio"]
+            for j in e.plantel + e.reserva}
     datos["ofertas"] = [(c, mios[n], m) for c, n, m in datos.get("ofertas", []) if n in mios]
     datos.setdefault("ventana", None)
     # las partidas de antes del ascenso siguen con una sola división
@@ -1200,6 +1207,8 @@ def cargar_partida():
         calcular_esperado(datos)
     if "staff_libres" not in datos:     # partidas de antes de las instalaciones
         iniciar_club(datos)
+    if not datos.get("con_reserva"):     # partidas de antes de la reserva
+        iniciar_reserva(datos)
     return datos
 
 
@@ -1248,6 +1257,7 @@ def nueva_partida(modelo):
     empezar_temporada(p)
     iniciar_tecnicos(p)
     iniciar_club(p)
+    iniciar_reserva(p)
     return p
 
 
@@ -1332,10 +1342,19 @@ def cerrar_temporada(p):
     cambios = {}
     for e in p["equipos"]:
         cambios[e.nombre] = J.pasar_temporada(e.plantel, e.ataque, e.defensa, rng, usados,
-                                              C.cantera(e) if e.instalaciones else 0.0)
+                                              C.cantera(e) if e.instalaciones else 0.0,
+                                              reponer=not p.get("con_reserva"))
         for j in cambios[e.nombre][1]:       # los juveniles firman su primer contrato
             M.firmar(j, anios=3)
     p["fin_contratos"] = M.vencimientos_ia(p["equipos"], p["mio"], p["libres"], rng)
+    if p.get("con_reserva"):
+        usados |= {j.completo for e in p["equipos"] for j in e.reserva}
+        for e in p["equipos"]:
+            C.pasar_anio_reserva(e, rng)
+            if e.nombre != p["mio"]:
+                C.reserva_ia(e)
+            nuevos = C.llegan_pibes(e, rng, usados)
+            cambios[e.nombre] = (cambios[e.nombre][0], cambios[e.nombre][1] + nuevos)
     contratos_dt(p)
     return cambios
 
@@ -1508,6 +1527,7 @@ def torneo_largo(modelo):
             plan = plan_mio if e.nombre == mio and plan_mio else plan_dt(e, rng_entreno)
             mejoras, lesionados = J.entrenar(e.plantel, *plan, rng_entreno,
                                              C.multiplicadores(e))
+            J.entrenar(e.reserva, "completo", "suave", rng_entreno, C.multiplicadores(e))
             if e.nombre == mio:
                 informe = (plan, mejoras, lesionados, plan_mio is None)
         M.cobrar_fecha(equipos, len(fixture))
@@ -1547,6 +1567,9 @@ def torneo_largo(modelo):
         if mio and any(j.contrato <= 0 for j in mi_equipo().plantel):
             renovaciones(p)
             guardar_partida(p)
+        if mio and any(j.edad >= C.EDAD_LIMITE for j in mi_equipo().reserva):
+            pibes_que_cumplen_21(p)
+            guardar_partida(p)
         abrir_ventana(p)
         abierto = ventana_actual(p) is not None
         if mio and not p["sin_dt"]:
@@ -1566,6 +1589,8 @@ def torneo_largo(modelo):
             if not p["sin_dt"]:
                 print("11) Mi DT")
             print("12) Instalaciones y cuerpo técnico")
+            if p.get("con_reserva"):
+                print(f"13) Reserva ({len(mi_equipo().reserva)} pibes)")
         opcion = input("> ").strip()
         if opcion in ("1", "2", "3") and mio and promesas_pendientes(p):
             for pr in promesas_pendientes(p):
@@ -1618,6 +1643,9 @@ def torneo_largo(modelo):
             J.mostrar_plantel(mio, next(e for e in equipos if e.nombre == mio).plantel)
         elif opcion == "9":
             mostrar_historial(p)
+        elif opcion == "13" and mio and p.get("con_reserva"):
+            menu_reserva(p)
+            guardar_partida(p)
         elif opcion == "12" and mio:
             menu_club(p)
             guardar_partida(p)
@@ -1849,10 +1877,12 @@ def tras_fecha_dt(p, marcadores, cierra):
         proponer(p, T.reunion_racha(t, rng, sin_perder, False, pos, nivel, ventana), "racha")
     elif jugadas >= p["prox_reunion"]:
         p["prox_reunion"] = jugadas + rng.randint(3, 5)
-        juveniles = [j for j in mi.plantel if j.edad <= 21 and j.potencial - J.nivel(j) >= 8
-                     and id(j) not in M.titulares(mi)
+        peor = min(J.nivel(j) for j in mi.plantel)
+        juveniles = [j for j in mi.plantel + mi.reserva
+                     if j.edad <= 21 and j.potencial - J.nivel(j) >= 8
+                     and (J.nivel(j) >= peor if j in mi.reserva else id(j) not in M.titulares(mi))
                      and f"juvenil:{j.completo}" not in t.avisos]
-        prometido = any(pr["pos"] == pos for pr in t.promesas)
+        prometido = any(pr.get("pos") == pos for pr in t.promesas)
         tits = M.titulares(mi)
         # a mitad de temporada mira los contratos que vencen
         vencen = [j for j in mi.plantel if j.contrato == 1 and id(j) in tits
@@ -1885,7 +1915,7 @@ def tras_fecha_dt(p, marcadores, cierra):
         elif tema == "juvenil":
             j = max(juveniles, key=lambda j: j.potencial)
             t.avisos.append(f"juvenil:{j.completo}")
-            reunion = T.reunion_juvenil(t, rng, j)
+            reunion = T.reunion_juvenil(t, rng, j, j in mi.reserva)
         elif tema == "refuerzo":
             costo = 1.2 * math.exp(0.13 * (nivel + 3 - 70))
             reunion = T.reunion_refuerzo(t, rng, pos, nivel, mi.caja, costo, ventana, False,
@@ -1971,6 +2001,12 @@ def mostrar_reunion(p):
     elif extra and "plan" in extra:
         p["plan_mio"] = None
         print("El entrenamiento lo decide el DT.")
+    elif extra and "subir" in extra:
+        mi = next(e for e in p["equipos"] if e.nombre == p["mio"])
+        pibe = next((j for j in mi.reserva if j.completo == extra["subir"]), None)
+        if pibe and len(mi.plantel) < M.PLANTEL_MAX:
+            C.subir(mi, pibe)
+            print(f"⬆ {pibe.corto} sube a Primera.")
     elif extra and "formacion" in extra:
         mi = next(e for e in p["equipos"] if e.nombre == p["mio"])
         mi.formacion_forzada = None
@@ -2133,6 +2169,12 @@ def iniciar_club(p):
     renovar_staff_libres(p)
 
 
+def iniciar_reserva(p):
+    usados = {j.completo for e in p["equipos"] for j in e.plantel}
+    C.iniciar_reserva(p["equipos"], random.Random(f"{p['semilla']}|reserva"), usados)
+    p["con_reserva"] = True
+
+
 def renovar_staff_libres(p):
     rng = random.Random(f"{p['semilla']}|{p['temporada']}|staff")
     p["staff_libres"] = C.candidatos(rng, set())
@@ -2277,6 +2319,103 @@ def despedir_staff(mi):
         print(f"{m['nombre']} ya no trabaja en el club.")
 
 
+# ---------------------------------------------------------------- reserva
+# Los pibes de las inferiores (ver club.py). El potencial se ve en estrellas,
+# estimado por el club: con un buen coordinador de inferiores, se acerca más.
+def linea_pibe(i, j):
+    print(f"{i:>2}. {j.pos:<3} {j.corto[:16]:<17}{j.edad}a Nv{J.nivel(j)} {C.estrellas_pot(j)}")
+
+
+def lista_reserva(mi):
+    pibes = sorted(mi.reserva, key=lambda j: (-(j.pot_est or j.potencial), -J.nivel(j)))
+    print(f"\n=== Reserva de {mi.nombre} ({len(pibes)}/{C.RESERVA_MAX}) ===")
+    print("(★ = potencial que estima el club)")
+    for i, j in enumerate(pibes, 1):
+        linea_pibe(i, j)
+    return pibes
+
+
+def menu_reserva(p):
+    mi = next(e for e in p["equipos"] if e.nombre == p["mio"])
+    while True:
+        pibes = lista_reserva(mi)
+        coord = mi.staff.get("inferiores", {}).get("nivel", 0)
+        print(f"Coordinador de inferiores: {estrellas(coord)}")
+        print(f"Plantel de Primera: {len(mi.plantel)} jugadores")
+        print("\n1) Subir a Primera  2) Dejarlo ir")
+        print("3) Ofrecerlo afuera  4) Volver")
+        opcion = input("> ").strip()
+        if opcion == "4":
+            return
+        if opcion not in ("1", "2", "3"):
+            print("Elegí del 1 al 4.")
+            continue
+        k = elegir_de_lista(len(pibes), "¿Cuál? (Enter = volver) ")
+        if k is None:
+            continue
+        j = pibes[k]
+        if opcion == "1":
+            if len(mi.plantel) >= M.PLANTEL_MAX:
+                print(f"Tenés {M.PLANTEL_MAX} en el plantel: liberá o vendé a alguno antes.")
+                continue
+            C.subir(mi, j)
+            print(f"⬆ {j.corto} sube a Primera con contrato por 3 temporadas.")
+        elif opcion == "2":
+            print(f"¿Seguro que dejás ir a {j.corto}? (s/n)")
+            if input("> ").strip().lower() == "s":
+                mi.reserva.remove(j)
+                print(f"{j.corto} deja el club.")
+        else:
+            ofrecer_pibe(p, mi, j)
+
+
+def ofrecer_pibe(p, mi, j):
+    """Mostrarlo a clubes de afuera (en las ventanas de pases)."""
+    if ventana_actual(p) is None:
+        print("Solo se puede con el mercado abierto.")
+        return
+    clave = f"pibe:{j.completo}"
+    if clave not in p["sondeos"]:
+        rng = random.Random(f"{p['semilla']}|{p['ventana']}|{clave}")
+        interesa = rng.random() < 0.25 + 0.12 * ((j.pot_est or j.potencial) - 60) / 8
+        p["sondeos"][clave] = ([[rng.choice(M.EXTERIOR), C.oferta_exterior(j, rng)]]
+                               if interesa else [])
+    ofertas = p["sondeos"][clave]
+    if not ofertas:
+        print(f"Afuera nadie se interesó por {j.corto} en esta ventana.")
+        return
+    club, monto = ofertas[0]
+    print(f"{club} ofrece {M.plata(monto)} por {j.corto}. ¿Aceptás? (s/n)")
+    if input("> ").strip().lower() == "s":
+        vender_pibe(p, mi, j, club, monto)
+
+
+def pibes_que_cumplen_21(p):
+    """Pretemporada: los pibes que cumplen 21 suben a Primera o se van."""
+    mi = next(e for e in p["equipos"] if e.nombre == p["mio"])
+    grandes = sorted((j for j in mi.reserva if j.edad >= C.EDAD_LIMITE), key=J.nivel,
+                     reverse=True)
+    print("\n" + "=" * ANCHO)
+    print(f"🌱 {len(grandes)} pibe{'s' if len(grandes) > 1 else ''} de la reserva "
+          f"cumple{'n' if len(grandes) > 1 else ''} {C.EDAD_LIMITE}")
+    print("=" * ANCHO)
+    print("Suben a Primera o dejan el club.")
+    for j in grandes:
+        print()
+        linea_pibe(1, j)
+        if len(mi.plantel) >= M.PLANTEL_MAX:
+            print(f"El plantel está lleno ({M.PLANTEL_MAX}): deja el club.")
+            mi.reserva.remove(j)
+            continue
+        print("1) Subirlo a Primera  2) Dejarlo ir")
+        if pedir_numero("> ", 1, 2) == 1:
+            C.subir(mi, j)
+            print(f"⬆ {j.corto} sube a Primera.")
+        else:
+            mi.reserva.remove(j)
+            print(f"{j.corto} deja el club.")
+
+
 # ---------------------------------------------------------------- mercado de pases
 def ventana_actual(p):
     """Clave de la ventana de pases abierta ahora, o None si está cerrado.
@@ -2310,6 +2449,11 @@ def abrir_ventana(p):
                 if noticia:
                     p["movimientos"].append(noticia)
     p["ofertas"] = M.ofertas_por_mios(equipos, p["mio"], rng) if p["mio"] else []
+    if p["mio"]:
+        mi = next(e for e in equipos if e.nombre == p["mio"])
+        for j in mi.reserva:
+            if j.pot_est >= 76 and rng.random() < 0.35:
+                p["ofertas"].append((rng.choice(M.EXTERIOR), j, C.oferta_exterior(j, rng)))
     p["sondeos"] = {}
     pedido_de_mercado(p, clave)
     guardar_partida(p)
@@ -2535,6 +2679,15 @@ def pedidos_del_dt(p, mi):
         ir_a_buscar(p, mi, lista[k][0].completo)
 
 
+def vender_pibe(p, mi, j, club, monto):
+    mi.reserva.remove(j)
+    mi.caja += monto
+    p["ofertas"] = [o for o in p["ofertas"] if o[1] is not j]
+    p["movimientos"].append(f"{j.corto} ({j.pos}, {j.edad} años, reserva): {mi.nombre} → "
+                            f"{club}, {M.plata(monto)}")
+    print(f"💰 {j.corto} se va a {club}. Entran {M.plata(monto)}.")
+
+
 def fichar_libres(p, mi):
     pos = pedir_posicion()
     libres = sorted((j for j in p["libres"] if pos is None or j.pos == pos),
@@ -2580,6 +2733,9 @@ def ofertas_recibidas(p, mi):
     print(f"1) Aceptar {M.plata(monto)} por {j.corto}  2) Rechazar")
     opcion = input("> ").strip()
     if opcion == "1":
+        if j in mi.reserva:
+            vender_pibe(p, mi, j, club, monto)
+            return
         if j not in mi.plantel or not M.puede_vender(mi, j):
             print("No podés venderlo: te quedás corto de plantel o sin nadie en el puesto.")
             return
@@ -2751,12 +2907,20 @@ def fin_de_temporada(p):
             texto = "Se retiran: " + ", ".join(
                 f"{j.corto} ({j.pos}, {j.edad})" for j in retirados)
             print(textwrap.fill(texto, ANCHO, subsequent_indent="  "))
-        if juveniles:
+        if juveniles and p.get("con_reserva"):
+            texto = "🌱 Llegan a la reserva: " + ", ".join(
+                f"{j.corto} ({j.pos}, {j.edad}, {C.estrellas_pot(j)})" for j in juveniles)
+            print(textwrap.fill(texto, ANCHO, subsequent_indent="  "))
+        elif juveniles:
             texto = "Suben de la cantera: " + ", ".join(
                 f"{j.corto} ({j.pos}, {j.edad}, pot. {j.potencial})" for j in juveniles)
             print(textwrap.fill(texto, ANCHO, subsequent_indent="  "))
         if not retirados:
             print("No se retira nadie.")
+        mi = next(e for e in p["equipos"] if e.nombre == mio)
+        if len(mi.plantel) < M.PLANTEL_MIN:
+            print(textwrap.fill(f"⚠ Quedan {len(mi.plantel)} jugadores en el plantel: subí "
+                                f"pibes de la reserva (13) o fichá en el mercado (10).", ANCHO))
     empezar_temporada(p)
     guardar_partida(p)
     return True
@@ -2801,7 +2965,7 @@ def ver_plantel(modelo):
 
 def main():
     global PLANTELES
-    print("SIMULADOR DE FÚTBOL — 1.7")
+    print("SIMULADOR DE FÚTBOL — 1.8")
     ruta = sys.argv[1] if len(sys.argv) > 1 else "modelo_poisson.json"
     modelo = cargar_modelo(ruta)
     cargar_ascenso(modelo)

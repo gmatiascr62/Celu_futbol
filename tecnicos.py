@@ -303,10 +303,13 @@ def reunion_racha(t, rng, n, mala, pos, nivel, ventana):
             ]}
 
 
-def reunion_juvenil(t, rng, jugador):
+def reunion_juvenil(t, rng, jugador, en_reserva=False):
+    subir = ("Subilo a Primera", (4, 1, 0), {"subir": jugador.completo},
+             _resp(rng, "contento"))
     return {"tema": "juvenil", "texto": _f(rng, FRASES["juvenil"], jugador=jugador.corto),
             "opciones": [
-                ("Dale, que juegue", (4, 1, 0), None, _resp(rng, "contento")),
+                subir if en_reserva else ("Dale, que juegue", (4, 1, 0), None,
+                                          _resp(rng, "contento")),
                 ("Todavía no, que espere", (-3, 0, 0), None, _resp(rng, "neutro")),
             ]}
 
