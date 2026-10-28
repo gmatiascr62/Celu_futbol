@@ -1,0 +1,7 @@
+Fuentes incluidas en la app:
+
+- Inter, de The Inter Project Authors (https://github.com/rsms/inter)
+- Barlow Condensed, de The Barlow Project Authors (https://github.com/jpt/barlow)
+
+Las dos se distribuyen con la SIL Open Font License, versión 1.1:
+https://openfontlicense.org

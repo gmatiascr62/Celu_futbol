@@ -31,22 +31,26 @@ de la lista (`l` la muestra) o con `0` para inventar uno con ratings 1-100.
 
 ### En el celular
 
-**Con la app (APK).** Una app de Android con pantallas propias (`main.py`,
-hecha con Kivy) que usa la misma lógica del juego. Por ahora tiene el
-torneo largo: elegir club y DT, la fecha con el partido relatado minuto a
-minuto, la tabla de cada división, el plantel con la ficha de cada
-jugador, el DT (ánimo, historia, formación, echarlo), las reuniones, las
-renovaciones, los pibes que cumplen 21 y el fin de temporada. El mercado,
-el entrenamiento, las instalaciones y la reserva vienen en las próximas
-etapas.
+**Con la app (APK).** Una app de Android hecha en Flutter (carpeta `app/`),
+con el juego reescrito en Dart y las mismas cuentas que la versión de
+Python: el modelo de goles, los DT que aprendieron jugando millones de
+partidos, los planteles y las tres divisiones. Tiene el torneo largo
+completo (el partido en vivo con relato, estadísticas y formaciones; la
+tabla y los goleadores; el plantel y la reserva con la ficha de cada
+jugador; el DT con su ánimo, sus reuniones y sus promesas; el mercado de
+pases; el entrenamiento; las instalaciones y el cuerpo técnico; las
+finanzas; el historial y el fin de temporada) y el partido amistoso.
 
 GitHub arma el APK solo cada vez que cambia algo de la app (pestaña
 *Actions* → "Armar APK" → la última corrida → *Artifacts* →
 `celu-futbol-apk`). Viene en un zip: adentro está el `.apk` para
 instalar. Android avisa que es de origen desconocido porque no está en
 Play Store; hay que permitirlo una vez. La partida se guarda dentro de la
-app (si se desinstala, se pierde), y cada versión nueva es un APK nuevo
-que se instala encima.
+app (si se desinstala, se pierde). Cada versión nueva se instala encima de
+la anterior porque el APK siempre tiene la misma firma: la arma GitHub la
+primera vez y la guarda en el caché de Actions. Para que no se pierda
+nunca, se puede guardar como secretos del repo (`FIRMA_APK`, el keystore
+en base64, y `FIRMA_APK_CLAVE`).
 
 **Con Pydroid 3.**
 
@@ -252,8 +256,7 @@ no se borra cuando se baja una versión nueva.
 
 | Archivo | Qué es |
 |---|---|
-| `main.py` | La app para Android (Kivy): sus pantallas. |
-| `buildozer.spec` | Cómo se arma el APK (lo usa GitHub Actions). |
+| `app/` | La app para Android (Flutter): el motor en `app/lib/motor/`, las pantallas en `app/lib/ui/`. |
 | `simulador_futbol.py` | El juego: partido, DT, cuadrangular, torneo largo y menú. |
 | `jugadores.py` | Jugadores, posiciones, formaciones, planteles, entrenamiento y temporadas. |
 | `mercado.py` | Valores, sueldos, finanzas de los clubes y mercado de pases. |

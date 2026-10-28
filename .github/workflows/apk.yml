@@ -1,21 +1,20 @@
 name: Armar APK
 
-# Se corre a mano desde la pestaña Actions de GitHub ("Run workflow"),
-# y solo cuando cambia algo de la app (en main o en un PR).
+# Arma el APK de la app de Flutter (carpeta app/). Se corre solo cuando
+# cambia algo de la app o de los datos del juego, o a mano desde la pestaña
+# Actions ("Run workflow").
 on:
   workflow_dispatch:
   push:
     branches: [main]
     paths:
-      - "*.py"
+      - "app/**"
       - "*.json"
-      - "buildozer.spec"
       - ".github/workflows/apk.yml"
   pull_request:
     paths:
-      - "*.py"
+      - "app/**"
       - "*.json"
-      - "buildozer.spec"
       - ".github/workflows/apk.yml"
 
 # Si llega un cambio nuevo, se cancela el armado anterior.
@@ -25,42 +24,78 @@ concurrency:
 
 jobs:
   apk:
-    runs-on: ubuntu-22.04
-    timeout-minutes: 90
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: app
     steps:
       - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
 
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
 
-      - name: Dependencias del sistema
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y git zip unzip autoconf libtool pkg-config \
-            zlib1g-dev libncurses5-dev libncursesw5-dev libtinfo5 cmake \
-            libffi-dev libssl-dev automake
-
-      - name: Buildozer
-        run: pip install --upgrade buildozer "cython<3.0" setuptools
-
-      # Las herramientas de Android pesan varios GB: se guardan entre corridas
-      - uses: actions/cache@v4
+      - uses: subosito/flutter-action@v2
         with:
-          path: |
-            ~/.buildozer
-            .buildozer
-          key: buildozer-${{ hashFiles('buildozer.spec') }}
+          channel: stable
+          flutter-version: 3.47.6
+          cache: true
+
+      - name: Datos del juego
+        run: tool/copiar_datos.sh
+
+      - name: Dependencias
+        run: flutter pub get
+
+      - name: Revisar el código
+        run: flutter analyze
+
+      - name: Pruebas
+        run: flutter test
+
+      # La firma tiene que ser siempre la misma para que cada APK se instale
+      # encima del anterior sin perder la partida. Si el repo tiene los
+      # secretos FIRMA_APK (el keystore en base64) y FIRMA_APK_CLAVE, se usan;
+      # si no, se genera una vez y se guarda en el caché de Actions.
+      - uses: actions/cache@v4
+        id: cache-firma
+        with:
+          path: app/android/firma
+          key: firma-apk-v1
+
+      - name: Firma del APK
+        env:
+          FIRMA_APK: ${{ secrets.FIRMA_APK }}
+          FIRMA_APK_CLAVE: ${{ secrets.FIRMA_APK_CLAVE }}
+        run: |
+          mkdir -p android/firma
+          if [ -n "$FIRMA_APK" ]; then
+            echo "$FIRMA_APK" | base64 -d > android/firma/celu.keystore
+            echo "$FIRMA_APK_CLAVE" > android/firma/clave
+          elif [ ! -f android/firma/celu.keystore ]; then
+            openssl rand -hex 16 > android/firma/clave
+            keytool -genkeypair -keystore android/firma/celu.keystore -alias celufutbol \
+              -keyalg RSA -keysize 2048 -validity 20000 \
+              -storepass "$(cat android/firma/clave)" -keypass "$(cat android/firma/clave)" \
+              -dname "CN=Celu Futbol, C=AR"
+          fi
+          CLAVE="$(cat android/firma/clave)"
+          {
+            echo "storeFile=$PWD/android/firma/celu.keystore"
+            echo "storePassword=$CLAVE"
+            echo "keyAlias=celufutbol"
+            echo "keyPassword=$CLAVE"
+          } > android/key.properties
 
       - name: Armar el APK
-        run: yes | buildozer android debug
+        run: flutter build apk --release
+
+      - name: Nombre del APK
+        run: cp build/app/outputs/flutter-apk/app-release.apk build/celu-futbol.apk
 
       - uses: actions/upload-artifact@v4
         with:
           name: celu-futbol-apk
-          path: bin/*.apk
+          path: app/build/celu-futbol.apk

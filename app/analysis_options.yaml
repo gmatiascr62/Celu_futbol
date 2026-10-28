@@ -1,0 +1,13 @@
+analyzer:
+  exclude:
+    - build/**
+    - android/**
+    - web/**
+include: package:flutter_lints/flutter.yaml
+
+linter:
+  rules:
+    # los módulos del motor se importan con la misma letra que en Python
+    # (J = jugadores, M = mercado, C = club, T = técnicos)
+    library_prefixes: false
+    avoid_print: false
